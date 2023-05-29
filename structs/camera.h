@@ -10,7 +10,7 @@ class camera
 public:
     __device__ camera(vec3 lookfrom, vec3 lookat, vec3 vup, float vfov, float aspect, float focus_dist, float aperture)
     {
-        float theta = vfov * M_PI / 180;
+        float theta = vfov * 3.14159265358979323846 / 180;
         float half_height = tan(theta / 2);
         float height = 2 * half_height;
         float width = aspect * height;

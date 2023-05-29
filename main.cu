@@ -22,37 +22,45 @@ void check_cuda(cudaError_t result, char const *const func, const char *const fi
     }
 }
 
-__global__ void rand_init(curandState *rand_state, uint seed) {
-    if (threadIdx.x == 0 && blockIdx.x == 0) {
+__global__ void rand_init(curandState *rand_state, unsigned int seed)
+{
+    if (threadIdx.x == 0 && blockIdx.x == 0)
+    {
         curand_init(seed, 0, 0, rand_state);
     }
 }
 
 // COLOR
-__device__ vec3 color(const ray& r, hittable **world, curandState *local_rand_state) {
+__device__ vec3 color(const ray &r, hittable **world, curandState *local_rand_state)
+{
     ray cur_ray = r;
-    vec3 cur_attenuation = vec3(1.0,1.0,1.0);
-    for(int i = 0; i < 50; i++) {
+    vec3 cur_attenuation = vec3(1.0, 1.0, 1.0);
+    for (int i = 0; i < 50; i++)
+    {
         hit_record rec;
-        if ((*world)->hit(cur_ray, 0.001f, FLT_MAX, rec)) {
+        if ((*world)->hit(cur_ray, 0.001f, FLT_MAX, rec))
+        {
             ray scattered;
             vec3 attenuation;
-            if(rec.mat_ptr->scatter(cur_ray, rec, attenuation, scattered, local_rand_state)) {
+            if (rec.mat_ptr->scatter(cur_ray, rec, attenuation, scattered, local_rand_state))
+            {
                 cur_attenuation *= attenuation;
                 cur_ray = scattered;
             }
-            else {
-                return vec3(0.0,0.0,0.0);
+            else
+            {
+                return vec3(0.0, 0.0, 0.0);
             }
         }
-        else {
+        else
+        {
             vec3 unit_direction = cur_ray.direction().normalize();
-            float t = 0.5f*(unit_direction.y() + 1.0f);
-            vec3 c = (1.0f-t)*vec3(1.0, 1.0, 1.0) + t*vec3(0.5, 0.7, 1.0);
+            float t = 0.5f * (unit_direction.y() + 1.0f);
+            vec3 c = (1.0f - t) * vec3(1.0, 1.0, 1.0) + t * vec3(0.5, 0.7, 1.0);
             return cur_attenuation * c;
         }
     }
-    return vec3(0.0,0.0,0.0); // exceeded recursion
+    return vec3(0.0, 0.0, 0.0); // exceeded recursion
 }
 
 // RENDER INIT
@@ -68,14 +76,17 @@ __global__ void render_init(int max_x, int max_y, curandState *rand_state)
 }
 
 // RENDER
-__global__ void render(vec3 *fb, int max_x, int max_y, int ns, camera **cam, hittable **world, curandState *rand_state) {
+__global__ void render(vec3 *fb, int max_x, int max_y, int ns, camera **cam, hittable **world, curandState *rand_state)
+{
     int i = threadIdx.x + blockIdx.x * blockDim.x;
     int j = threadIdx.y + blockIdx.y * blockDim.y;
-    if((i >= max_x) || (j >= max_y)) return;
-    int pixel_index = j*max_x + i;
+    if ((i >= max_x) || (j >= max_y))
+        return;
+    int pixel_index = j * max_x + i;
     curandState local_rand_state = rand_state[pixel_index];
-    vec3 col(0,0,0);
-    for(int s=0; s < ns; s++) {
+    vec3 col(0, 0, 0);
+    for (int s = 0; s < ns; s++)
+    {
         float u = float(i + curand_uniform(&local_rand_state)) / float(max_x);
         float v = float(j + curand_uniform(&local_rand_state)) / float(max_y);
         ray r = (*cam)->get_ray(u, v, &local_rand_state);
@@ -88,31 +99,38 @@ __global__ void render(vec3 *fb, int max_x, int max_y, int ns, camera **cam, hit
     col[2] = sqrt(col[2]);
     fb[pixel_index] = col;
 }
+
 #define RND (curand_uniform(&local_rand_state))
 
-
 // SETUP
-__global__ void create_world(hittable **d_list, hittable **d_world, camera **d_camera, int nx, int ny, int num_hittables, curandState *rand_state) {
-    if (threadIdx.x == 0 && blockIdx.x == 0) {
+__global__ void create_world(hittable **d_list, hittable **d_world, camera **d_camera, int nx, int ny, int num_hittables, curandState *rand_state)
+{
+    if (threadIdx.x == 0 && blockIdx.x == 0)
+    {
         curandState local_rand_state = *rand_state;
-        d_list[0] = new sphere(vec3(0,-5000.0,0), 5000,
+        d_list[0] = new sphere(vec3(0, -5000.0, 0), 5000,
                                new matte(vec3(0.2, 0.2, 0.2)));
         int i = 1;
         int span = 5;
-        for(int a = -span; a < span; a++) {
-            for(int b = -span; b < span; b++) {
+        for (int a = -span; a < span; a++)
+        {
+            for (int b = -span; b < span; b++)
+            {
                 float choose_mat = RND;
-                vec3 center(a+0.9f*RND,0.2,b+0.9f*RND);
-                if(choose_mat < 0.25f) {
+                vec3 center(a + 0.9f * RND, 0.2, b + 0.9f * RND);
+                if (choose_mat < 0.25f)
+                {
                     d_list[i++] = new sphere(center, 0.2,
-                                             new matte(vec3(RND*0.2f, RND*0.4f, RND)));
+                                             new matte(vec3(RND * 0.2f, RND * 0.4f, RND)));
                 }
-                else if(choose_mat < 0.65f) {
+                else if (choose_mat < 0.65f)
+                {
                     d_list[i++] = new sphere(center, 0.2,
                                              new metal(vec3(RND, RND, RND), 0.0f));
                 }
-                else {
-                    d_list[i++] = new sphere(center, 0.2, new transparent(1.5, vec3(RND*0.2f, RND*0.4f, RND)));
+                else
+                {
+                    d_list[i++] = new sphere(center, 0.2, new transparent(1.5, vec3(RND * 0.2f, RND * 0.4f, RND)));
                 }
             }
         }
@@ -120,19 +138,19 @@ __global__ void create_world(hittable **d_list, hittable **d_world, camera **d_c
         // d_list[i++] = new sphere(vec3(-4, 1, 0), 1.0, new matte(vec3(0.4, 0.2, 0.1)));
         // d_list[i++] = new sphere(vec3(4, 1, 0),  1.0, new metal(vec3(0.7, 0.6, 0.5), 0.0));
         *rand_state = local_rand_state;
-        *d_world  = new world(d_list, num_hittables);
+        *d_world = new world(d_list, num_hittables);
 
-        vec3 lookfrom(0,1,-15);
-        vec3 lookat(0,0,0);
-        float dist_to_focus = (lookfrom-lookat).length();
+        vec3 lookfrom(0, 1, -15);
+        vec3 lookat(0, 0, 0);
+        float dist_to_focus = (lookfrom - lookat).length();
         float aperture = 0.04;
-        *d_camera   = new camera(lookfrom,
-                                 lookat,
-                                 vec3(0,1,0),
-                                 8.0,
-                                 float(nx)/float(ny),
-                                 aperture,
-                                 dist_to_focus);
+        *d_camera = new camera(lookfrom,
+                               lookat,
+                               vec3(0, 1, 0),
+                               8.0,
+                               float(nx) / float(ny),
+                               aperture,
+                               dist_to_focus);
     }
 }
 
@@ -147,10 +165,10 @@ __global__ void free_world(hittable **d_list, hittable **d_world, camera **d_cam
 int main()
 {
     // IMAGE PARAMS
-    const int nx = 2560;
+    const int nx = 800;
     const float ratio = 16.0f / 9.0f;
     const int ny = int(nx / ratio);
-    const int ns = 3000;
+    const int ns = 1000;
     const int tx = 8;
     const int ty = 8;
 
@@ -192,7 +210,6 @@ int main()
     render<<<blocks, threads>>>(fb, nx, ny, ns, d_camera, d_world, d_rand_state);
     checkCudaErrors(cudaGetLastError());
     checkCudaErrors(cudaDeviceSynchronize());
-
 
     // file output ppm
     FILE *f = fopen("image.ppm", "w");
