@@ -50,6 +50,10 @@ class material
 {
 public:
     __device__ virtual bool scatter(const ray &r_in, const hit_record &rec, vec3 &attenuation, ray &scattered, curandState *local_rand_state) const = 0;
+    __device__ virtual vec3 emit(float u, float v, const vec3 &p) const
+    {
+        return vec3(0, 0, 0);
+    }
 };
 
 class matte : public material
@@ -85,6 +89,7 @@ public:
         attenuation = albedo;
         return (scattered.direction().dot(rec.normal) > 0.0f);
     }
+
 
 public:
     vec3 albedo;
@@ -141,4 +146,20 @@ public:
     vec3 albedo;
 };
 
+class light : public material
+{
+    public:
+    vec3 color;
+    float intensity;
+    __device__ light(vec3 color, float intensity) : color(color), intensity(intensity) {}
+    __device__ virtual bool scatter(const ray &r_in, const hit_record &rec, vec3 &attenuation, ray &scattered, curandState *local_rand_state) const
+    {
+        return false;
+    }
+    __device__ virtual vec3 emit(float u, float v, const vec3 &p) const
+    {
+        return color * intensity;
+    }
+
+};
 #endif

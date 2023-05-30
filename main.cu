@@ -8,6 +8,7 @@
 #include "structs/camera.h"
 #include "structs/material.h"
 #include <curand_kernel.h>
+#include "CImg.h"
 
 // CUDA STUFF
 #define checkCudaErrors(val) check_cuda((val), #val, __FILE__, __LINE__)
@@ -31,10 +32,11 @@ __global__ void rand_init(curandState *rand_state, unsigned int seed)
 }
 
 // COLOR
-__device__ vec3 color(const ray &r, hittable **world, curandState *local_rand_state)
+__device__ vec3 color(const ray &r, hittable **world, curandState *local_rand_state, bool bg_gradient)
 {
     ray cur_ray = r;
     vec3 cur_attenuation = vec3(1.0, 1.0, 1.0);
+    vec3 cur_light = vec3(1.0,1.0,1.0);
     for (int i = 0; i < 50; i++)
     {
         hit_record rec;
@@ -45,19 +47,22 @@ __device__ vec3 color(const ray &r, hittable **world, curandState *local_rand_st
             if (rec.mat_ptr->scatter(cur_ray, rec, attenuation, scattered, local_rand_state))
             {
                 cur_attenuation *= attenuation;
-                cur_ray = scattered;
+                cur_ray = scattered; 
             }
             else
             {
-                return vec3(0.0, 0.0, 0.0);
+                cur_light *= rec.mat_ptr->emit(rec.u, rec.v, rec.p);
+                return cur_attenuation * cur_light;
             }
         }
         else
         {
+
             vec3 unit_direction = cur_ray.direction().normalize();
             float t = 0.5f * (unit_direction.y() + 1.0f);
             vec3 c = (1.0f - t) * vec3(1.0, 1.0, 1.0) + t * vec3(0.5, 0.7, 1.0);
-            return cur_attenuation * c;
+            return bg_gradient ? cur_attenuation * c : vec3(0.0, 0.0, 0.0);
+           
         }
     }
     return vec3(0.0, 0.0, 0.0); // exceeded recursion
@@ -76,7 +81,7 @@ __global__ void render_init(int max_x, int max_y, curandState *rand_state)
 }
 
 // RENDER
-__global__ void render(vec3 *fb, int max_x, int max_y, int ns, camera **cam, hittable **world, curandState *rand_state)
+__global__ void render(vec3 *fb, int max_x, int max_y, int ns, camera **cam, hittable **world, curandState *rand_state, bool bg_gradient)
 {
     int i = threadIdx.x + blockIdx.x * blockDim.x;
     int j = threadIdx.y + blockIdx.y * blockDim.y;
@@ -90,7 +95,7 @@ __global__ void render(vec3 *fb, int max_x, int max_y, int ns, camera **cam, hit
         float u = float(i + curand_uniform(&local_rand_state)) / float(max_x);
         float v = float(j + curand_uniform(&local_rand_state)) / float(max_y);
         ray r = (*cam)->get_ray(u, v, &local_rand_state);
-        col += color(r, world, &local_rand_state);
+        col += color(r, world, &local_rand_state, bg_gradient);
     }
     rand_state[pixel_index] = local_rand_state;
     col /= float(ns);
@@ -108,32 +113,41 @@ __global__ void create_world(hittable **d_list, hittable **d_world, camera **d_c
     if (threadIdx.x == 0 && blockIdx.x == 0)
     {
         curandState local_rand_state = *rand_state;
-        d_list[0] = new sphere(vec3(0, -5000.0, 0), 5000,
-                               new matte(vec3(0.2, 0.2, 0.2)));
+        d_list[0] = new sphere(vec3(0, -10000.0, 0), 10000,
+                               new matte(vec3(0.5, 0.5, 0.5)));
         int i = 1;
-        int span = 5;
+        int span = 10;
         for (int a = -span; a < span; a++)
         {
             for (int b = -span; b < span; b++)
             {
                 float choose_mat = RND;
                 vec3 center(a + 0.9f * RND, 0.2, b + 0.9f * RND);
-                if (choose_mat < 0.25f)
+                vec3 color = vec3(RND * RND, RND * RND, RND * RND);
+                if (choose_mat < 0.15f)
                 {
                     d_list[i++] = new sphere(center, 0.2,
-                                             new matte(vec3(RND * 0.2f, RND * 0.4f, RND)));
+                                             new light(color, 6));
                 }
-                else if (choose_mat < 0.65f)
+                else if (choose_mat < 0.3f)
                 {
                     d_list[i++] = new sphere(center, 0.2,
-                                             new metal(vec3(RND, RND, RND), 0.0f));
+                                             new matte(color));
+                }
+                else if (choose_mat < 0.5f)
+                {
+                    d_list[i++] = new sphere(center, 0.2,
+                                             new metal(color, 0.0f));
                 }
                 else
                 {
-                    d_list[i++] = new sphere(center, 0.2, new transparent(1.5, vec3(RND * 0.2f, RND * 0.4f, RND)));
+                    d_list[i++] = new sphere(center, 0.2, new transparent(1.5, color));
                 }
             }
         }
+        d_list[i++] = new sphere(vec3(12, 25, 8), 10, new light(vec3(1.0, 1.0, 1.0), 15.0));
+        d_list[i++] = new sphere(vec3(0, 1, 0), 1, new metal(vec3(1.0, 1.0, 1.0), 0.0));
+
         // d_list[i++] = new sphere(vec3(0, 1,0),  1.0, new transparent(1.5));
         // d_list[i++] = new sphere(vec3(-4, 1, 0), 1.0, new matte(vec3(0.4, 0.2, 0.1)));
         // d_list[i++] = new sphere(vec3(4, 1, 0),  1.0, new metal(vec3(0.7, 0.6, 0.5), 0.0));
@@ -147,7 +161,7 @@ __global__ void create_world(hittable **d_list, hittable **d_world, camera **d_c
         *d_camera = new camera(lookfrom,
                                lookat,
                                vec3(0, 1, 0),
-                               8.0,
+                               20.0,
                                float(nx) / float(ny),
                                aperture,
                                dist_to_focus);
@@ -165,13 +179,14 @@ __global__ void free_world(hittable **d_list, hittable **d_world, camera **d_cam
 int main()
 {
     // IMAGE PARAMS
-    const int nx = 800;
+    const int nx = 1920;
     const float ratio = 16.0f / 9.0f;
     const int ny = int(nx / ratio);
-    const int ns = 1000;
+    const int ns = 5000;
     const int tx = 8;
     const int ty = 8;
-
+    const bool SHOW_IMAGE = true;
+    const bool BG_GRADIENT = false;
     int num_pixels = nx * ny;
     size_t fb_size = num_pixels * sizeof(vec3);
 
@@ -191,7 +206,7 @@ int main()
 
     // ALLOCATE WORLD
     hittable **d_list;
-    int num_hittables = 10 * 10 + 1; // 2*span*2*span + floor + any other objects
+    int num_hittables = 20 * 20 + 1 + 1 + 1; // 2*span*2*span + floor + any other objects
     checkCudaErrors(cudaMalloc((void **)&d_list, num_hittables * sizeof(hittable *)));
     hittable **d_world;
     checkCudaErrors(cudaMalloc((void **)&d_world, sizeof(hittable *)));
@@ -207,7 +222,7 @@ int main()
     render_init<<<blocks, threads>>>(nx, ny, d_rand_state);
     checkCudaErrors(cudaGetLastError());
     checkCudaErrors(cudaDeviceSynchronize());
-    render<<<blocks, threads>>>(fb, nx, ny, ns, d_camera, d_world, d_rand_state);
+    render<<<blocks, threads>>>(fb, nx, ny, ns, d_camera, d_world, d_rand_state, BG_GRADIENT);
     checkCudaErrors(cudaGetLastError());
     checkCudaErrors(cudaDeviceSynchronize());
 
@@ -248,5 +263,25 @@ int main()
     checkCudaErrors(cudaFree(fb));
 
     cudaDeviceReset();
+    if (SHOW_IMAGE == true)
+    {
+#pragma comment(lib, "windowscodecs.lib")
+#pragma comment(lib, "gdi32.lib")
+#pragma comment(lib, "user32.lib")
+        using namespace cimg_library;
+        CImg<unsigned char> image("image.ppm");
+        CImgDisplay main_disp(image, "Image");
+        // float zoom_factor = 1.0f;
+        // const float zoom_step = 0.1f;
+        while (!main_disp.is_closed())
+        {
+            main_disp.wait();
+            if (main_disp.is_keyESC() || main_disp.is_keyQ())
+            {
+                main_disp.close();
+            }
+        }
+    }
+
     return 0;
 }
