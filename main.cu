@@ -9,6 +9,8 @@
 #include "structs/material.h"
 #include <curand_kernel.h>
 #include "CImg.h"
+// timer
+#include <chrono>
 
 // CUDA STUFF
 #define checkCudaErrors(val) check_cuda((val), #val, __FILE__, __LINE__)
@@ -113,7 +115,7 @@ __global__ void create_world(hittable **d_list, hittable **d_world, camera **d_c
     if (threadIdx.x == 0 && blockIdx.x == 0)
     {
         curandState local_rand_state = *rand_state;
-        d_list[0] = new sphere(vec3(0, -10000.0, 0), 10000,
+        d_list[0] = new sphere(vec3(0, -5000.0, 0), 5000,
                                new matte(vec3(0.5, 0.5, 0.5)));
         int i = 1;
         int span = 10;
@@ -178,11 +180,13 @@ __global__ void free_world(hittable **d_list, hittable **d_world, camera **d_cam
 
 int main()
 {
+    // start timer
+    auto start = std::chrono::high_resolution_clock::now();
     // IMAGE PARAMS
     const int nx = 1920;
     const float ratio = 16.0f / 9.0f;
     const int ny = int(nx / ratio);
-    const int ns = 5000;
+    const int ns = 300;
     const int tx = 8;
     const int ty = 8;
     const bool SHOW_IMAGE = true;
@@ -263,6 +267,11 @@ int main()
     checkCudaErrors(cudaFree(fb));
 
     cudaDeviceReset();
+    // end timer
+    auto end = std::chrono::high_resolution_clock::now();
+    std::chrono::duration<double> elapsed = end - start;
+    std::cout << "Elapsed time: " << elapsed.count() << " s\n";
+
     if (SHOW_IMAGE == true)
     {
 #pragma comment(lib, "windowscodecs.lib")
