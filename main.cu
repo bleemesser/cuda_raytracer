@@ -9,6 +9,9 @@
 #include "structs/material.h"
 #include <curand_kernel.h>
 #include "CImg.h"
+#include <glad.h>
+#include <glfw3.h>
+#include <cuda_gl_interop.h>
 // timer
 #include <chrono>
 
@@ -54,7 +57,7 @@ __device__ vec3 color(const ray &r, hittable **world, curandState *local_rand_st
             else
             {
                 cur_light *= rec.mat_ptr->emit(rec.u, rec.v, rec.p);
-                return cur_attenuation * cur_light;
+                return cur_attenuation * cur_light; // im a genius no way this actually worked
             }
         }
         else
@@ -118,7 +121,7 @@ __global__ void create_world(hittable **d_list, hittable **d_world, camera **d_c
         d_list[0] = new sphere(vec3(0, -5000.0, 0), 5000,
                                new matte(vec3(0.5, 0.5, 0.5)));
         int i = 1;
-        int span = 10;
+        int span = 15;
         for (int a = -span; a < span; a++)
         {
             for (int b = -span; b < span; b++)
@@ -156,7 +159,7 @@ __global__ void create_world(hittable **d_list, hittable **d_world, camera **d_c
         *rand_state = local_rand_state;
         *d_world = new world(d_list, num_hittables);
 
-        vec3 lookfrom(0, 1, -15);
+        vec3 lookfrom(0, 2, -15);
         vec3 lookat(0, 0, 0);
         float dist_to_focus = (lookfrom - lookat).length();
         float aperture = 0.04;
@@ -178,15 +181,25 @@ __global__ void free_world(hittable **d_list, hittable **d_world, camera **d_cam
     delete *d_camera;
 }
 
+void framebuffer_size_callback(GLFWwindow* window, int width, int height) {
+        glViewport(0, 0, width, height);
+}
+
+void processInput(GLFWwindow *window) {
+        if(glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS)
+                glfwSetWindowShouldClose(window, true);
+}
+
 int main()
 {
+    std::cout << "Rendering... \n";
     // start timer
     auto start = std::chrono::high_resolution_clock::now();
     // IMAGE PARAMS
-    const int nx = 1920;
+    const int nx = 800;
     const float ratio = 16.0f / 9.0f;
     const int ny = int(nx / ratio);
-    const int ns = 300;
+    const int ns = 100;
     const int tx = 8;
     const int ty = 8;
     const bool SHOW_IMAGE = true;
@@ -194,9 +207,46 @@ int main()
     int num_pixels = nx * ny;
     size_t fb_size = num_pixels * sizeof(vec3);
 
+    // GLFW SETUP
+    glfwInit();
+    glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
+    glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
+    glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
+
+    GLFWwindow* window = glfwCreateWindow(nx, ny, "Test", NULL, NULL);
+    if (window == NULL)
+    {
+        std::cout << "Failed to create GLFW window" << std::endl;
+        glfwTerminate();
+        return -1;
+    }
+    glfwMakeContextCurrent(window);
+
+    if (!gladLoadGLLoader((GLADloadproc)glfwGetProcAddress))
+    {
+        std::cout << "Failed to initialize GLAD" << std::endl;
+        return -1;
+    } 
+
+    glViewport(0, 0, nx, ny);
+     
+    glfwSetFramebufferSizeCallback(window, framebuffer_size_callback);
+
     // ALLOCATE FB
     vec3 *fb;
     checkCudaErrors(cudaMallocManaged((void **)&fb, fb_size));
+    // ALLOCATE GL FB using GL_PIXEL_UNPACK_BUFFER
+    GLuint pbo;
+    glGenBuffers(1, &pbo);
+    glBindBuffer(GL_PIXEL_UNPACK_BUFFER, pbo);
+    glBufferData(GL_PIXEL_UNPACK_BUFFER, fb_size, nullptr, GL_STREAM_DRAW);
+
+    cudaGraphicsResource* cuda_pbo_resource;
+    cudaGraphicsGLRegisterBuffer(&cuda_pbo_resource, pbo, cudaGraphicsMapFlagsNone);
+    cudaGraphicsMapResources(1, &cuda_pbo_resource, 0);
+    void* ptr;
+    size_t size;
+    cudaGraphicsResourceGetMappedPointer(&ptr, &size, cuda_pbo_resource);
 
     // ALLOCATE RANDOM STATE
     curandState *d_rand_state;
@@ -210,7 +260,7 @@ int main()
 
     // ALLOCATE WORLD
     hittable **d_list;
-    int num_hittables = 20 * 20 + 1 + 1 + 1; // 2*span*2*span + floor + any other objects
+    int num_hittables = 30 * 30 + 1 + 1 + 1; // 2*span*2*span + floor + any other objects
     checkCudaErrors(cudaMalloc((void **)&d_list, num_hittables * sizeof(hittable *)));
     hittable **d_world;
     checkCudaErrors(cudaMalloc((void **)&d_world, sizeof(hittable *)));
@@ -228,8 +278,35 @@ int main()
     checkCudaErrors(cudaDeviceSynchronize());
     render<<<blocks, threads>>>(fb, nx, ny, ns, d_camera, d_world, d_rand_state, BG_GRADIENT);
     checkCudaErrors(cudaGetLastError());
-    checkCudaErrors(cudaDeviceSynchronize());
 
+    cudaGraphicsUnmapResources(1, &cuda_pbo_resource, 0);
+    glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
+    // Create OpenGL texture
+    GLuint texture;
+    glGenTextures(1, &texture);
+    glBindTexture(GL_TEXTURE_2D, texture);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, nx, ny, 0, GL_RGB, GL_FLOAT, nullptr);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    
+    while (!glfwWindowShouldClose(window)) {
+        processInput(window);
+        glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+        glClear( GL_COLOR_BUFFER_BIT );
+
+        // Draw texture
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, nx, ny, 0, GL_RGB, GL_FLOAT, nullptr);
+        glDrawArrays(GL_TRIANGLES, 0, 6);
+
+        glfwSwapBuffers(window);
+        glfwPollEvents();
+
+    }
+
+    checkCudaErrors(cudaDeviceSynchronize());
+    glfwTerminate();
     // file output ppm
     FILE *f = fopen("image.ppm", "w");
     fprintf(f, "P3\n%d %d\n%d\n", nx, ny, 255);
