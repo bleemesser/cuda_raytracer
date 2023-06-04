@@ -1,2 +1,5 @@
 *.ppm
 *.exe
+dump.cu
+*.exp
+*.lib
