@@ -14,6 +14,7 @@
 #pragma comment(lib, "windowscodecs.lib")
 #pragma comment(lib, "gdi32.lib")
 #pragma comment(lib, "user32.lib")
+
 // CUDA STUFF
 #define checkCudaErrors(val) check_cuda((val), #val, __FILE__, __LINE__)
 void check_cuda(cudaError_t result, char const *const func, const char *const file, int const line)
@@ -40,7 +41,7 @@ __device__ vec3 color(const ray &r, hittable **world, curandState *local_rand_st
 {
     ray cur_ray = r;
     vec3 cur_attenuation = vec3(1.0, 1.0, 1.0);
-    vec3 cur_light = vec3(1.0,1.0,1.0);
+    vec3 cur_light = vec3(1.0, 1.0, 1.0);
     for (int i = 0; i < 50; i++)
     {
         hit_record rec;
@@ -51,7 +52,7 @@ __device__ vec3 color(const ray &r, hittable **world, curandState *local_rand_st
             if (rec.mat_ptr->scatter(cur_ray, rec, attenuation, scattered, local_rand_state))
             {
                 cur_attenuation *= attenuation;
-                cur_ray = scattered; 
+                cur_ray = scattered;
             }
             else
             {
@@ -66,7 +67,6 @@ __device__ vec3 color(const ray &r, hittable **world, curandState *local_rand_st
             float t = 0.5f * (unit_direction.y() + 1.0f);
             vec3 c = (1.0f - t) * vec3(1.0, 1.0, 1.0) + t * vec3(0.5, 0.7, 1.0);
             return bg_gradient ? cur_attenuation * c : vec3(0.0, 0.0, 0.0);
-           
         }
     }
     return vec3(0.0, 0.0, 0.0); // exceeded recursion
@@ -118,9 +118,9 @@ __global__ void create_world(hittable **d_list, hittable **d_world, camera **d_c
     {
         curandState local_rand_state = *rand_state;
         d_list[0] = new sphere(vec3(0, -10000.0, 0), 10000,
-                               new matte(vec3(0.5, 0.5, 0.5)));
+                               new matte(vec3(0.7, 0.7, 0.7)));
         int i = 1;
-        int span = 10;
+        int span = 15;
         for (int a = -span; a < span; a++)
         {
             for (int b = -span; b < span; b++)
@@ -158,14 +158,14 @@ __global__ void create_world(hittable **d_list, hittable **d_world, camera **d_c
         *rand_state = local_rand_state;
         *d_world = new world(d_list, num_hittables);
 
-        vec3 lookfrom(0, 1, -15);
+        vec3 lookfrom(0, 2, -15);
         vec3 lookat(0, 0, 0);
         float dist_to_focus = (lookfrom - lookat).length();
         float aperture = 0.04;
         *d_camera = new camera(lookfrom,
                                lookat,
                                vec3(0, 1, 0),
-                               20.0,
+                               25.0,
                                float(nx) / float(ny),
                                aperture,
                                dist_to_focus);
@@ -194,8 +194,8 @@ int main(int argc, char **argv)
     bool BG_GRADIENT = true;
     int num_pixels = nx * ny;
     size_t fb_size = num_pixels * sizeof(vec3);
-
-    // grab command line arguments that are flagged -x, -ns, -bg (bool)
+    int PROGRESS_DISPLAY_PERCENTAGE = 10;
+    // grab command line arguments that are flagged -x, -ns, -bg (bool) -p (progress display percentage)
     for (int i = 1; i < argc; i++)
     {
         if (strcmp(argv[i], "-x") == 0)
@@ -216,6 +216,11 @@ int main(int argc, char **argv)
             i++;
             BG_GRADIENT = atoi(argv[i]);
         }
+        else if (strcmp(argv[i], "-p") == 0)
+        {
+            i++;
+            PROGRESS_DISPLAY_PERCENTAGE = atoi(argv[i]);
+        }
     }
     // ALLOCATE FB
     vec3 *fb;
@@ -233,7 +238,7 @@ int main(int argc, char **argv)
 
     // ALLOCATE WORLD
     hittable **d_list;
-    int num_hittables = 20 * 20 + 1 + 1 + 1; // 2*span*2*span + floor + any other objects
+    int num_hittables = 30 * 30 + 1 + 1 + 1; // 2*span*2*span + floor + any other objects
     checkCudaErrors(cudaMalloc((void **)&d_list, num_hittables * sizeof(hittable *)));
     hittable **d_world;
     checkCudaErrors(cudaMalloc((void **)&d_world, sizeof(hittable *)));
@@ -249,47 +254,54 @@ int main(int argc, char **argv)
     render_init<<<blocks, threads>>>(nx, ny, d_rand_state);
     checkCudaErrors(cudaGetLastError());
     checkCudaErrors(cudaDeviceSynchronize());
-    // create a buffer for the previous frame
-    // vec3 *disp_fb;
-    // checkCudaErrors(cudaMallocManaged((void **)&disp_fb, fb_size));
 
     // use cimg to create an empty display window
     cimg_library::CImg<unsigned char> cimg(nx, ny, 1, 3, 0);
     cimg_library::CImgDisplay display(cimg, "Ray Tracer");
 
-
+    bool render_complete = false;
     for (int f = 0; f < ns; f++)
-    {   
+    {
+        if (display.is_closed())
+            break;
         printf("Rendering frame %d\n", f);
         render<<<blocks, threads>>>(fb, nx, ny, 1, d_camera, d_world, d_rand_state, BG_GRADIENT);
         checkCudaErrors(cudaGetLastError());
         checkCudaErrors(cudaDeviceSynchronize());
-
-
-        // overwrite the previous cimg display with the new image
-        for (int j = ny - 1; j >= 0; j--)
+        if (f % int(ns / PROGRESS_DISPLAY_PERCENTAGE) == 0 || f == ns - 1)
         {
-            for (int i = 0; i < nx; i++)
+            // overwrite the previous cimg display with the new image
+            for (int j = ny - 1; j >= 0; j--)
             {
-                int pixel_index = j * nx + i;
-                int ir = int(255.99 * fb[pixel_index].x() / (f+1));
-                int ig = int(255.99 * fb[pixel_index].y() / (f+1));
-                int ib = int(255.99 * fb[pixel_index].z() / (f+1));
+                for (int i = 0; i < nx; i++)
+                {
+                    int pixel_index = j * nx + i;
+                    int ir = int(255.99 * fb[pixel_index].x() / (f + 1));
+                    int ig = int(255.99 * fb[pixel_index].y() / (f + 1));
+                    int ib = int(255.99 * fb[pixel_index].z() / (f + 1));
 
-                // clamp values and write to cimg 
-                cimg(i, ny-j-1, 0, 0) = ir > 255 ? 255 : ir;
-                cimg(i, ny-j-1, 0, 1) = ig > 255 ? 255 : ig;
-                cimg(i, ny-j-1, 0, 2) = ib > 255 ? 255 : ib;
+                    // clamp values and write to cimg
+                    cimg(i, ny - j - 1, 0, 0) = ir > 255 ? 255 : ir;
+                    cimg(i, ny - j - 1, 0, 1) = ig > 255 ? 255 : ig;
+                    cimg(i, ny - j - 1, 0, 2) = ib > 255 ? 255 : ib;
+                }
             }
+            // display the image
+            cimg.display(display);
         }
-        // display the image
-        cimg.display(display);
-        if (display.is_closed())
-            break;
+        if (f == ns - 1)
+        {
+            render_complete = true;
+        }
     }
+
     // stop timer
     auto stop = std::chrono::high_resolution_clock::now();
-    
+    auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(stop - start);
+    // output render time in minutes and seconds
+    int minutes = duration.count() / 1000.0f / 60.0f;
+    int seconds = duration.count() / 1000.0f - minutes * 60.0f;
+    std::cout << "Render time: " << minutes << " minutes " << seconds << " seconds" << std::endl;
 
     cimg.display(display);
 
@@ -298,31 +310,32 @@ int main(int argc, char **argv)
     {
         display.wait();
     }
-    
-    FILE *f = fopen("image.ppm", "w");
-    fprintf(f, "P3\n%d %d\n%d\n", nx, ny, 255);
-
-    for (int j = ny - 1; j >= 0; j--)
+    if (render_complete)
     {
-        for (int i = 0; i < nx; i++)
-        {
-            size_t pixel_index = j * nx + i;
-            int ir = int(255.99 * fb[pixel_index].x());
-            int ig = int(255.99 * fb[pixel_index].y());
-            int ib = int(255.99 * fb[pixel_index].z());
-            // validate that the color is in range, if it's similar to the negative 32 bit int, it's probably a NaN and should be averaged
-            ir = ir > 255 ? 255 : ir;
-            ir = ir < 0 ? 0 : ir;
-            ig = ig > 255 ? 255 : ig;
-            ig = ig < 0 ? 0 : ig;
-            ib = ib > 255 ? 255 : ib;
-            ib = ib < 0 ? 0 : ib;
+        FILE *f = fopen("image.ppm", "w");
+        fprintf(f, "P3\n%d %d\n%d\n", nx, ny, 255);
 
-            fprintf(f, "%d %d %d\n", ir, ig, ib);
+        for (int j = ny - 1; j >= 0; j--)
+        {
+            for (int i = 0; i < nx; i++)
+            {
+                size_t pixel_index = j * nx + i;
+                int ir = int(255.99 * fb[pixel_index].x() / ns);
+                int ig = int(255.99 * fb[pixel_index].y() / ns);
+                int ib = int(255.99 * fb[pixel_index].z() / ns);
+                // validate that the color is in range
+                ir = ir > 255 ? 255 : ir;
+                ir = ir < 0 ? 0 : ir;
+                ig = ig > 255 ? 255 : ig;
+                ig = ig < 0 ? 0 : ig;
+                ib = ib > 255 ? 255 : ib;
+                ib = ib < 0 ? 0 : ib;
+
+                fprintf(f, "%d %d %d\n", ir, ig, ib);
+            }
         }
+        fclose(f);
     }
-    fclose(f);
-    
 
     checkCudaErrors(cudaDeviceSynchronize());
     free_world<<<1, 1>>>(d_list, d_world, d_camera);
@@ -334,5 +347,4 @@ int main(int argc, char **argv)
     checkCudaErrors(cudaFree(d_rand_state2));
     checkCudaErrors(cudaFree(fb));
     cudaDeviceReset();
-
 }
