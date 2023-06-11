@@ -9,11 +9,10 @@
 #include "structs/material.h"
 #include <curand_kernel.h>
 #include "CImg.h"
-#include <map>
 #include <chrono>
-#pragma comment(lib, "windowscodecs.lib")
-#pragma comment(lib, "gdi32.lib")
-#pragma comment(lib, "user32.lib")
+#pragma comment(lib, "windowscodecs.lib") // WINDOWS
+#pragma comment(lib, "gdi32.lib") // WINDOWS
+#pragma comment(lib, "user32.lib") // WINDOWS
 
 // CUDA STUFF
 #define checkCudaErrors(val) check_cuda((val), #val, __FILE__, __LINE__)
@@ -118,7 +117,7 @@ __global__ void create_world(hittable **d_list, hittable **d_world, camera **d_c
     {
         curandState local_rand_state = *rand_state;
         d_list[0] = new sphere(vec3(0, -10000.0, 0), 10000,
-                               new matte(vec3(0.7, 0.7, 0.7)));
+                               new matte(vec3(0.9, 0.9, 0.9)));
         int i = 1;
         int span = 15;
         for (int a = -span; a < span; a++)
