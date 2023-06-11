@@ -2,7 +2,7 @@
     "tasks": [
         {
             "type": "cppbuild",
-            "label": "C/C++: g++.exe build active file",
+            "label": "C/C++: g++.exe build active file", // remove .exe for linux otherwise it will not work (idk why they match to the label name)
             "command": "nvcc",
             "args": [
                 "-o",
