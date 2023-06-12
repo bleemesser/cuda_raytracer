@@ -16,12 +16,6 @@ class sphere: public hittable  {
 };
 
 __device__ bool sphere::hit(const ray& r, float t_min, float t_max, hit_record& rec) const {
-    // first check if the ray hits the bounding box
-    // if not, return false
-    aabb box;
-    if (!bounding_box(t_min, t_max, box)) {
-        return false;
-    }
     vec3 oc = r.origin() - center;
     float a = r.direction().dot(r.direction());
     float b = oc.dot(r.direction());

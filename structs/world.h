@@ -15,9 +15,9 @@ class world: public hittable {
 };
 
 __device__ bool world::hit(const ray& r, float t_min, float t_max, hit_record& rec) const {
-    // first check if the ray hits the bounding box
-    aabb box;
-    if (!bounding_box(t_min, t_max, box)) return false;
+    // // first check if the ray hits the bounding box
+    // aabb box;
+    // if (!bounding_box(t_min, t_max, box)) return false;
     hit_record temp_rec;
     bool hit_anything = false;
     double closest_so_far = t_max;

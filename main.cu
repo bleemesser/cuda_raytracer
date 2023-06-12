@@ -113,15 +113,80 @@ __global__ void render(vec3 *fb, int max_x, int max_y, int ns, camera **cam, hit
 
 #define RND (curand_uniform(&local_rand_state))
 
+// // SETUP
+// __global__ void create_world(hittable **d_list, hittable **d_world, camera **d_camera, int nx, int ny, int num_hittables, int span, curandState *rand_state)
+// {
+//     if (threadIdx.x == 0 && blockIdx.x == 0)
+//     {
+//         curandState local_rand_state = *rand_state;
+//         d_list[0] = new sphere(vec3(0, -10000.0, 0), 10000,
+//                                new matte(vec3(0.9, 0.9, 0.9)));
+//         int i = 1;
+//         for (int a = -span; a < span; a++)
+//         {
+//             for (int b = -span; b < span; b++)
+//             {
+//                 float choose_mat = RND;
+//                 vec3 center(a + 0.9f * RND, 0.2, b + 0.9f * RND);
+//                 vec3 color = vec3(RND * RND, RND * RND, RND * RND);
+//                 if (choose_mat < 0.15f)
+//                 {
+//                     d_list[i++] = new sphere(center, 0.2,
+//                                              new light(color, 6));
+//                 }
+//                 else if (choose_mat < 0.3f)
+//                 {
+//                     d_list[i++] = new sphere(center, 0.2,
+//                                              new matte(color));
+//                 }
+//                 else if (choose_mat < 0.5f)
+//                 {
+//                     d_list[i++] = new sphere(center, 0.2,
+//                                              new metal(color, 0.0f));
+//                 }
+//                 else
+//                 {
+//                     d_list[i++] = new sphere(center, 0.2, new transparent(1.5, color));
+//                 }
+//             }
+//         }
+//         d_list[i++] = new sphere(vec3(12, 25, 8), 10, new light(vec3(1.0, 1.0, 1.0), 15.0));
+//         d_list[i++] = new sphere(vec3(0, 1, 0), 1, new metal(vec3(1.0, 1.0, 1.0), 0.0));
+
+
+//         // d_list[i++] = new sphere(vec3(0, 1,0),  1.0, new transparent(1.5));
+//         // d_list[i++] = new sphere(vec3(-4, 1, 0), 1.0, new matte(vec3(0.4, 0.2, 0.1)));
+//         // d_list[i++] = new sphere(vec3(4, 1, 0),  1.0, new metal(vec3(0.7, 0.6, 0.5), 0.0));
+//         *rand_state = local_rand_state;
+//         *d_world = new world(d_list, num_hittables);
+
+
+//         vec3 lookfrom(0, 2, -15);
+//         vec3 lookat(0, 0, 0);
+//         float dist_to_focus = (lookfrom - lookat).length();
+//         float aperture = 0.04;
+//         *d_camera = new camera(lookfrom,
+//                                lookat,
+//                                vec3(0, 1, 0),
+//                                25.0,
+//                                float(nx) / float(ny),
+//                                aperture,
+//                                dist_to_focus);
+//     }
+// }
 // SETUP
-__global__ void create_world(hittable **d_list, hittable **d_world, camera **d_camera, int nx, int ny, int num_hittables, int span, curandState *rand_state)
+__global__ void create_world(hittable** d_list, hittable** d_world, camera** d_camera, int nx, int ny, int num_hittables, int span, curandState* rand_state)
 {
     if (threadIdx.x == 0 && blockIdx.x == 0)
     {
         curandState local_rand_state = *rand_state;
-        d_list[0] = new sphere(vec3(0, -10000.0, 0), 10000,
-                               new matte(vec3(0.9, 0.9, 0.9)));
-        int i = 1;
+
+        const int list_size = span * span + 2;
+        hittable** d_temp_list = new hittable*[list_size];
+
+        int i = 0;
+        d_temp_list[i++] = new sphere(vec3(0, -10000.0, 0), 10000, new matte(vec3(0.9, 0.9, 0.9)));
+        
         for (int a = -span; a < span; a++)
         {
             for (int b = -span; b < span; b++)
@@ -129,49 +194,48 @@ __global__ void create_world(hittable **d_list, hittable **d_world, camera **d_c
                 float choose_mat = RND;
                 vec3 center(a + 0.9f * RND, 0.2, b + 0.9f * RND);
                 vec3 color = vec3(RND * RND, RND * RND, RND * RND);
+                
                 if (choose_mat < 0.15f)
                 {
-                    d_list[i++] = new sphere(center, 0.2,
-                                             new light(color, 6));
+                    d_temp_list[i++] = new sphere(center, 0.2, new light(color, 6));
                 }
                 else if (choose_mat < 0.3f)
                 {
-                    d_list[i++] = new sphere(center, 0.2,
-                                             new matte(color));
+                    d_temp_list[i++] = new sphere(center, 0.2, new matte(color));
                 }
                 else if (choose_mat < 0.5f)
                 {
-                    d_list[i++] = new sphere(center, 0.2,
-                                             new metal(color, 0.0f));
+                    d_temp_list[i++] = new sphere(center, 0.2, new metal(color, 0.0f));
                 }
                 else
                 {
-                    d_list[i++] = new sphere(center, 0.2, new transparent(1.5, color));
+                    d_temp_list[i++] = new sphere(center, 0.2, new transparent(1.5, color));
                 }
             }
         }
-        d_list[i++] = new sphere(vec3(12, 25, 8), 10, new light(vec3(1.0, 1.0, 1.0), 15.0));
-        d_list[i++] = new sphere(vec3(0, 1, 0), 1, new metal(vec3(1.0, 1.0, 1.0), 0.0));
 
-        // d_list[i++] = new sphere(vec3(0, 1,0),  1.0, new transparent(1.5));
-        // d_list[i++] = new sphere(vec3(-4, 1, 0), 1.0, new matte(vec3(0.4, 0.2, 0.1)));
-        // d_list[i++] = new sphere(vec3(4, 1, 0),  1.0, new metal(vec3(0.7, 0.6, 0.5), 0.0));
-        *rand_state = local_rand_state;
-        *d_world = new world(d_list, num_hittables);
+        d_temp_list[i++] = new sphere(vec3(12, 25, 8), 10, new light(vec3(1.0, 1.0, 1.0), 15.0));
+        d_temp_list[i++] = new sphere(vec3(0, 1, 0), 1, new metal(vec3(1.0, 1.0, 1.0), 0.0));
 
+        // Construct BVH tree
+        int* num_new;
+        bvh_node* bvh_root = new bvh_node(d_temp_list, 0, i, 0.0, 0.0, &num_new);
+
+        // Update d_list with BVH root
+        *d_list = bvh_root;
+
+        // Assign world and camera
+        *d_world = new world(d_list, num_hittables);  // Pass the BVH root as the world
         vec3 lookfrom(0, 2, -15);
         vec3 lookat(0, 0, 0);
         float dist_to_focus = (lookfrom - lookat).length();
         float aperture = 0.04;
-        *d_camera = new camera(lookfrom,
-                               lookat,
-                               vec3(0, 1, 0),
-                               25.0,
-                               float(nx) / float(ny),
-                               aperture,
-                               dist_to_focus);
+        *d_camera = new camera(lookfrom, lookat, vec3(0, 1, 0), 25.0, float(nx) / float(ny), aperture, dist_to_focus);
+
+        *rand_state = local_rand_state;
     }
 }
+
 
 __global__ void free_world(hittable **d_list, hittable **d_world, camera **d_camera)
 {
@@ -452,6 +516,8 @@ int main(int argc, char **argv)
     for (int i = 5; i < 50; i+=5) {
         std::cout << "Benchmarking with " << i << " objects" << std::endl;
             // ALLOCATE WORLD
+        // get number of bounding boxes
+
         int num_hittables = 2*i * 2*i + 1 + 1 + 1; // 2*span*2*span + floor + any other objects
         checkCudaErrors(cudaMalloc((void **)&d_list, num_hittables * sizeof(hittable *)));
         checkCudaErrors(cudaMalloc((void **)&d_world, sizeof(hittable *)));
@@ -459,6 +525,18 @@ int main(int argc, char **argv)
         create_world<<<1, 1>>>(d_list, d_world, d_camera, nx, ny, num_hittables, i, d_rand_state2);
         checkCudaErrors(cudaGetLastError());
         checkCudaErrors(cudaDeviceSynchronize());
+
+        while (cudaGetLastError() != cudaSuccess)
+        {
+            // try again but with num_hittables + 1
+            num_hittables++;
+            checkCudaErrors(cudaMalloc((void **)&d_list, num_hittables * sizeof(hittable *)));
+            checkCudaErrors(cudaMalloc((void **)&d_world, sizeof(hittable *)));
+            checkCudaErrors(cudaMalloc((void **)&d_camera, sizeof(camera *)));
+            create_world<<<1, 1>>>(d_list, d_world, d_camera, nx, ny, num_hittables, i, d_rand_state2);
+            checkCudaErrors(cudaGetLastError());
+            checkCudaErrors(cudaDeviceSynchronize());
+        }
 
         // RENDER A SINGLE FRAME WITH 1 SAMPLE
         auto start1 = std::chrono::high_resolution_clock::now();

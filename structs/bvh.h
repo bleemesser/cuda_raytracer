@@ -70,7 +70,7 @@ __device__ bool bvh_node::hit(const ray& r, float t_min, float t_max, hit_record
     return hit_left || hit_right;
 }
 
-__device__ bvh_node::bvh_node(hittable **l, int start, int end, float time0, float time1) {
+__device__ bvh_node::bvh_node(hittable **l, int start, int end, float time0, float time1, int& num_new_hittables) {
     auto l2 = l;
     // generate a random state
     curandState s;
@@ -96,6 +96,7 @@ __device__ bvh_node::bvh_node(hittable **l, int start, int end, float time0, flo
         auto mid = start + object_span/2;
         left = new bvh_node(l2, start, mid, time0, time1);
         right = new bvh_node(l2, mid, end, time0, time1);
+        num_new_hittables += 2;
     }
 
     aabb box_left, box_right;
