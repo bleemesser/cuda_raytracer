@@ -2,18 +2,26 @@
 #define SPHERE_H
 
 #include "hittable.h"
+#include "aabb.h"
 
 class sphere: public hittable  {
     public:
         __device__ sphere() {}
         __device__ sphere(vec3 cen, float r, material *m) : center(cen), radius(r), mat_ptr(m)  {};
         __device__ virtual bool hit(const ray& r, float tmin, float tmax, hit_record& rec) const;
+        __device__ virtual bool bounding_box(float t0, float t1, aabb& box) const;
         vec3 center;
         float radius;
         material *mat_ptr;
 };
 
 __device__ bool sphere::hit(const ray& r, float t_min, float t_max, hit_record& rec) const {
+    // first check if the ray hits the bounding box
+    // if not, return false
+    aabb box;
+    if (!bounding_box(t_min, t_max, box)) {
+        return false;
+    }
     vec3 oc = r.origin() - center;
     float a = r.direction().dot(r.direction());
     float b = oc.dot(r.direction());
@@ -39,5 +47,11 @@ __device__ bool sphere::hit(const ray& r, float t_min, float t_max, hit_record& 
     }
     return false;
 }
+
+__device__ bool sphere::bounding_box(float t0, float t1, aabb& box) const {
+    box = aabb(center - vec3(radius, radius, radius), center + vec3(radius, radius, radius));
+    return true;
+}
+
 
 #endif

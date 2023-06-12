@@ -78,6 +78,9 @@ public:
     __host__ __device__ vec3 cross(const vec3 &v) const { return vec3(e[1] * v.e[2] - e[2] * v.e[1], e[2] * v.e[0] - e[0] * v.e[2], e[0] * v.e[1] - e[1] * v.e[0]); };
     __host__ __device__ vec3 normalize() const { return *this / length(); };
 
+    // index operator
+    __host__ __device__ float get(int i) const { return e[i]; };
+
 public:
     float e[3];
 };
@@ -91,5 +94,7 @@ __host__ __device__ inline vec3 operator/(float t, const vec3 &v)
 {
     return vec3(v.e[0] / t, v.e[1] / t, v.e[2] / t);
 }
+
+
 
 #endif
