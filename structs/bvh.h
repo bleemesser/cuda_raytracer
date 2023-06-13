@@ -11,10 +11,12 @@ class bvh_node : public hittable {
     public:
         __device__ bvh_node();
 
-        __device__ bvh_node(world& w, float time0, float time1) : bvh_node((hittable**)w.list, int(0), int(w.list_size), time0, time1) {}
+        __device__ bvh_node(hittable** l, int num_hittables, float time0, float time1, int* num_new_hittables, curandState *local_rand_state)
+            : bvh_node(l, 0, num_hittables, time0, time1, num_new_hittables, local_rand_state) {}
+
 
         __device__ bvh_node(
-            hittable **l, int start, int end, float time0, float time1);
+            hittable **l, int start, int end, float time0, float time1, int* num_new_hittables, curandState *local_rand_state);
 
         __device__ virtual bool hit(
             const ray& r, float t_min, float t_max, hit_record& rec) const override;
@@ -25,6 +27,8 @@ class bvh_node : public hittable {
     public:
         hittable *left;
         hittable *right;
+        aabb l1;
+        aabb r1;
         aabb b;
 
 };
@@ -70,41 +74,49 @@ __device__ bool bvh_node::hit(const ray& r, float t_min, float t_max, hit_record
     return hit_left || hit_right;
 }
 
-__device__ bvh_node::bvh_node(hittable **l, int start, int end, float time0, float time1, int& num_new_hittables) {
-    auto l2 = l;
-    // generate a random state
-    curandState s;
-    curandState* local_rand_state = threadIdx.x == 0 ? &s : &s;
+__device__ bvh_node::bvh_node(hittable **l, int start, int end, float time0, float time1, int *num_new_hittables, curandState *local_rand_state) {
+    printf("bvh: made it to constructor\n");
     int axis = random_int(0, 2, local_rand_state);
     auto comparator = (axis == 0) ? box_x_compare
                     : (axis == 1) ? box_y_compare
                     : box_z_compare;
+    printf("bvh: made it past comparator\n");
     int object_span = end - start;
-
+    printf("object_span: %d\n", object_span);
+    printf("start: %d\n", start);
+    printf("end: %d\n", end);
     if (object_span == 1) {
-        left = right = l2[start];
+        printf("Object span == 1\n");
+        left = right = l[start];
+        printf("bvh: made it past object_span == 1\n");
     } else if (object_span == 2) {
-        if (comparator(l2[start], l2[start+1])) {
-            left = l2[start];
-            right = l2[start+1];
+        printf("Object span == 2\n");
+        if (comparator(l[start], l[start + 1])) {
+            left = l[start];
+            right = l[start + 1];
         } else {
-            left = l2[start+1];
-            right = l2[start];
+            left = l[start + 1];
+            right = l[start];
         }
+        printf("bvh: made it past object_span == 2\n");
     } else {
-        thrust::sort(thrust::seq, l2 + start, l2 + end, comparator);
-        auto mid = start + object_span/2;
-        left = new bvh_node(l2, start, mid, time0, time1);
-        right = new bvh_node(l2, mid, end, time0, time1);
+        printf("Object span > 2\n");
+        // thrust::sort(l + start, l + end, comparator);
+        printf("bvh: made it past sort\n");
+        int mid = start + object_span / 2;
+        left = new bvh_node(l, start, mid, time0, time1, num_new_hittables, local_rand_state);
+        right = new bvh_node(l, mid, end, time0, time1, num_new_hittables, local_rand_state);
+        printf("bvh: made it past left and right\n");
         num_new_hittables += 2;
     }
 
-    aabb box_left, box_right;
-
-    if (!left->bounding_box(time0, time1, box_left) || !right->bounding_box(time0, time1, box_right))
+    if (!left->bounding_box(time0, time1, l1)
+        || !right->bounding_box(time0, time1, r1)
+    )
         printf("No bounding box in bvh_node constructor.\n");
-
-    b = surrounding_box(box_left, box_right);
+    printf("bvh: made it past bounding box\n");
+    b = surrounding_box(l1, r1);
+    printf("bvh: made it to end of constructor\n");
 }
 
 
