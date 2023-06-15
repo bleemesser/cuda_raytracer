@@ -10,9 +10,10 @@
 #include <curand_kernel.h>
 #include "CImg.h"
 #include <chrono>
+
 #pragma comment(lib, "windowscodecs.lib") // WINDOWS
-#pragma comment(lib, "gdi32.lib") // WINDOWS
-#pragma comment(lib, "user32.lib") // WINDOWS
+#pragma comment(lib, "gdi32.lib")         // WINDOWS
+#pragma comment(lib, "user32.lib")        // WINDOWS
 
 // CUDA STUFF
 #define checkCudaErrors(val) check_cuda((val), #val, __FILE__, __LINE__)
@@ -93,18 +94,19 @@ __global__ void render(vec3 *fb, int max_x, int max_y, int ns, camera **cam, hit
     int pixel_index = j * max_x + i;
     curandState local_rand_state = rand_state[pixel_index];
     vec3 col(0, 0, 0);
+    vec3 tempcol(0, 0, 0);
     for (int s = 0; s < ns; s++)
     {
         float u = float(i + curand_uniform(&local_rand_state)) / float(max_x);
         float v = float(j + curand_uniform(&local_rand_state)) / float(max_y);
         ray r = (*cam)->get_ray(u, v, &local_rand_state);
-        col += color(r, world, &local_rand_state, bg_gradient);
+        tempcol = color(r, world, &local_rand_state, bg_gradient);
+        tempcol[0] = sqrt(tempcol[0]);
+        tempcol[1] = sqrt(tempcol[1]);
+        tempcol[2] = sqrt(tempcol[2]);
+        col += tempcol;
     }
     rand_state[pixel_index] = local_rand_state;
-    col /= float(ns);
-    col[0] = sqrt(col[0]);
-    col[1] = sqrt(col[1]);
-    col[2] = sqrt(col[2]);
     fb[pixel_index] += col;
 }
 
@@ -209,18 +211,18 @@ cimg_library::CImg<unsigned char> edge_effect(cimg_library::CImg<unsigned char> 
             }
             else
             {
-                int ir2 = int(255.99 * fb[pixel_index + 1].x());    // right
-                int ig2 = int(255.99 * fb[pixel_index + 1].y());    // right
-                int ib2 = int(255.99 * fb[pixel_index + 1].z());    // right
-                int ir3 = int(255.99 * fb[pixel_index - 1].x());    // left
-                int ig3 = int(255.99 * fb[pixel_index - 1].y());    // left
-                int ib3 = int(255.99 * fb[pixel_index - 1].z());    // left
-                int ir4 = int(255.99 * fb[pixel_index + nx].x());   // up
-                int ig4 = int(255.99 * fb[pixel_index + nx].y());   // up
-                int ib4 = int(255.99 * fb[pixel_index + nx].z());   // up
-                int ir5 = int(255.99 * fb[pixel_index - nx].x());   // down
-                int ig5 = int(255.99 * fb[pixel_index - nx].y());   // down
-                int ib5 = int(255.99 * fb[pixel_index - nx].z());   // down
+                int ir2 = int(255.99 * fb[pixel_index + 1].x());  // right
+                int ig2 = int(255.99 * fb[pixel_index + 1].y());  // right
+                int ib2 = int(255.99 * fb[pixel_index + 1].z());  // right
+                int ir3 = int(255.99 * fb[pixel_index - 1].x());  // left
+                int ig3 = int(255.99 * fb[pixel_index - 1].y());  // left
+                int ib3 = int(255.99 * fb[pixel_index - 1].z());  // left
+                int ir4 = int(255.99 * fb[pixel_index + nx].x()); // up
+                int ig4 = int(255.99 * fb[pixel_index + nx].y()); // up
+                int ib4 = int(255.99 * fb[pixel_index + nx].z()); // up
+                int ir5 = int(255.99 * fb[pixel_index - nx].x()); // down
+                int ig5 = int(255.99 * fb[pixel_index - nx].y()); // down
+                int ib5 = int(255.99 * fb[pixel_index - nx].z()); // down
                 ir = (ir + ir2 + ir3 + ir4 + ir5) / 5;
                 ig = (ig + ig2 + ig3 + ig4 + ig5) / 5;
                 ib = (ib + ib2 + ib3 + ib4 + ib5) / 5;
@@ -237,18 +239,20 @@ int main(int argc, char **argv)
 {
     // start timer
     auto start = std::chrono::high_resolution_clock::now();
+    auto stop = std::chrono::high_resolution_clock::now();
     // IMAGE PARAMS
-    int nx = 640;
+    int nx = 800;
     const float ratio = 16.0f / 9.0f;
     int ny = int(nx / ratio);
-    int ns = 1000;
+    int ns = 100;
     const int tx = 8;
     const int ty = 8;
-    bool BG_GRADIENT = true;
+    bool BG_GRADIENT = false;
+    bool USE_DISPLAY = true;
     int num_pixels = nx * ny;
     size_t fb_size = num_pixels * sizeof(vec3);
-    int PROGRESS_DISPLAY_PERCENTAGE = 10;
-    // grab command line arguments that are flagged -x, -ns, -bg (bool) -p (progress display percentage)
+    int PROGRESS_DISPLAY_PERCENTAGE = 50;
+    // grab command line arguments that are flagged -x, -ns, -bg (bool) -p (progress display percentage) -d (use display)
     for (int i = 1; i < argc; i++)
     {
         if (strcmp(argv[i], "-x") == 0)
@@ -273,6 +277,11 @@ int main(int argc, char **argv)
         {
             i++;
             PROGRESS_DISPLAY_PERCENTAGE = atoi(argv[i]);
+        }
+        else if (strcmp(argv[i], "-d") == 0)
+        {
+            i++;
+            USE_DISPLAY = atoi(argv[i]);
         }
     }
     // ALLOCATE FB
@@ -307,159 +316,195 @@ int main(int argc, char **argv)
     render_init<<<blocks, threads>>>(nx, ny, d_rand_state);
     checkCudaErrors(cudaGetLastError());
     checkCudaErrors(cudaDeviceSynchronize());
-
-    // use cimg to create an empty display window
-    cimg_library::CImg<unsigned char> cimg(nx, ny, 1, 3, 0);
-    cimg_library::CImgDisplay display(cimg, "Ray Tracer");
     vec3 *temp_fb;
-    vec3 *prev_frame;
-    int prev_frame_index = 0;
-    int display_state = 0;
-    // normal malloc for temp_fb: we want to store the frame on the host when writing it out to avoid too many invdividual copy calls
     temp_fb = (vec3 *)malloc(fb_size);
-    prev_frame = (vec3 *)malloc(fb_size);
+
     bool render_complete = false;
-    for (int f = 0; f < ns; f++)
+
+    if (USE_DISPLAY)
     {
-        if (display.is_closed())
-            break;
-        if (display.is_key(49))
+        // use cimg to create an empty display window
+        cimg_library::CImg<unsigned char> cimg(nx, ny, 1, 3, 0);
+        cimg_library::CImgDisplay display(cimg, "Ray Tracer");
+        vec3 *prev_frame;
+        int prev_frame_index = 0;
+        int display_state = 0;
+        // normal malloc for temp_fb: we want to store the frame on the host when writing it out to avoid too many invdividual copy calls
+        prev_frame = (vec3 *)malloc(fb_size);
+        for (int f = 0; f < ns; f++)
         {
-            display_state = 0;
-        }
-        if (display.is_key(50) && f > 0)
-        {
-            display_state = 1;
-        }
-        if (display.is_key(51))
-        {
-            display_state = 2;
-        }
-        // if up arrow is pressed, increase progress display percentage 
-        if (display.is_keyARROWUP())
-        {
-            if (PROGRESS_DISPLAY_PERCENTAGE + 50 <= ns)
+            if (display.is_closed() || display.is_keyESC())
+                break;
+            if (display.is_key(49))
             {
-                printf("Increasing progress display percentage to %d\n", PROGRESS_DISPLAY_PERCENTAGE + 50);
-                PROGRESS_DISPLAY_PERCENTAGE += 50;
+                display_state = 0;
             }
-        }
-        // if down arrow is pressed, decrease progress display percentage
-        if (display.is_keyARROWDOWN())
-        {
-            if (PROGRESS_DISPLAY_PERCENTAGE - 50 >= 1)
+            if (display.is_key(50) && f > 0)
             {
-                printf("Decreasing progress display percentage to %d\n", PROGRESS_DISPLAY_PERCENTAGE - 50);
-                PROGRESS_DISPLAY_PERCENTAGE -= 50;
+                display_state = 1;
             }
-        }
-        // if ] is pressed, increase number of samples
-        if (display.is_keyW())
-        {
-            printf("Increasing number of samples to %d\n", ns + 100);
-            ns += 100;
-        }
-        // if [ is pressed, decrease number of samples
-        if (display.is_keyS())
-        {
-            if (ns - 100 >= 1 && ns - 200 > f)
+            if (display.is_key(51))
             {
-                printf("Decreasing number of samples to %d\n", ns - 100);
-                ns -= 100;
+                display_state = 2;
             }
-        }
-        printf("Rendering frame %d\n", f);
-        render<<<blocks, threads>>>(fb, nx, ny, 1, d_camera, d_world, d_rand_state, BG_GRADIENT);
-        checkCudaErrors(cudaGetLastError());
-        checkCudaErrors(cudaDeviceSynchronize());
-        if (f % int(ns / PROGRESS_DISPLAY_PERCENTAGE) == 0 || f == ns - 1)
-        {
-            // copy fb to temp_fb on the host
-            checkCudaErrors(cudaMemcpy(temp_fb, fb, fb_size, cudaMemcpyDeviceToHost));
-            if (display_state == 0)
+            // if up arrow is pressed, increase progress display percentage
+            if (display.is_keyARROWUP())
             {
-                printf("Displaying frame %d\n", f);
-                // overwrite the previous cimg display with the new image
-                for (int j = ny - 1; j >= 0; j--)
+                if (PROGRESS_DISPLAY_PERCENTAGE + 50 <= 100)
                 {
-                    for (int i = 0; i < nx; i++)
-                    {
-                        int pixel_index = j * nx + i;
-                        int ir = int(255.99 * temp_fb[pixel_index].x() / (f + 1));
-                        int ig = int(255.99 * temp_fb[pixel_index].y() / (f + 1));
-                        int ib = int(255.99 * temp_fb[pixel_index].z() / (f + 1));
-
-                        // clamp values and write to cimg
-                        cimg(i, ny - j - 1, 0, 0) = ir > 255 ? 255 : ir;
-                        cimg(i, ny - j - 1, 0, 1) = ig > 255 ? 255 : ig;
-                        cimg(i, ny - j - 1, 0, 2) = ib > 255 ? 255 : ib;
-                    }
+                    printf("Increasing progress display percentage to %d\n", PROGRESS_DISPLAY_PERCENTAGE + 50);
+                    PROGRESS_DISPLAY_PERCENTAGE += 5;
                 }
-                // display the image
-                cimg.display(display);
-            }
-            else if (display_state == 1 && prev_frame != NULL) // if key 1 is pressed and the previous frame is not null, display the difference between the previous frame and the current frame
-            {
-                printf("Displaying difference between frame %d and frame %d\n", f, f - 1);
-                // overwrite the previous cimg display with the new image
-                for (int j = ny - 1; j >= 0; j--)
+                else
                 {
-                    for (int i = 0; i < nx; i++)
-                    {
-                        int pixel_index = j * nx + i;
-                        int ir = int(255.99 * (temp_fb[pixel_index].x() - prev_frame[pixel_index].x()) / ((f + 1) - prev_frame_index + 1));
-                        int ig = int(255.99 * (temp_fb[pixel_index].y() - prev_frame[pixel_index].y()) / ((f + 1) - prev_frame_index + 1));
-                        int ib = int(255.99 * (temp_fb[pixel_index].z() - prev_frame[pixel_index].z()) / ((f + 1) - prev_frame_index + 1));
-
-                        // clamp values and write to cimg
-                        cimg(i, ny - j - 1, 0, 0) = ir > 255 ? 255 : ir;
-                        cimg(i, ny - j - 1, 0, 1) = ig > 255 ? 255 : ig;
-                        cimg(i, ny - j - 1, 0, 2) = ib > 255 ? 255 : ib;
-                    }
+                    PROGRESS_DISPLAY_PERCENTAGE += 100 - PROGRESS_DISPLAY_PERCENTAGE;
+                    printf("Increasing progress display percentage to %d\n", PROGRESS_DISPLAY_PERCENTAGE);
                 }
-                // display the image
-                cimg.display(display);
             }
-            else if (display_state == 2)
+            // if down arrow is pressed, decrease progress display percentage
+            if (display.is_keyARROWDOWN())
             {
-                printf("Displaying edge effect for frame %d\n", f);
-                cimg = edge_effect(cimg, temp_fb, f, nx, ny);
-                cimg.display(display);
+                if (PROGRESS_DISPLAY_PERCENTAGE - 50 >= 1)
+                {
+                    printf("Decreasing progress display percentage to %d\n", PROGRESS_DISPLAY_PERCENTAGE - 50);
+                    PROGRESS_DISPLAY_PERCENTAGE -= 50;
+                }
+                else
+                {
+                    PROGRESS_DISPLAY_PERCENTAGE -= PROGRESS_DISPLAY_PERCENTAGE - 1;
+                    printf("Decreasing progress display percentage to %d\n", PROGRESS_DISPLAY_PERCENTAGE);
+                }
             }
-            // copy temp_fb to prev_frame
-            memcpy(prev_frame, temp_fb, fb_size);
-            prev_frame_index = f;
-        }
-        if (f == ns - 1)
-        {
-            render_complete = true;
-        }
-        if (display.is_keyR())
-        {
-            create_world<<<1, 1>>>(d_list, d_world, d_camera, nx, ny, num_hittables, d_rand_state2);
+            // if W is pressed, increase number of samples
+            if (display.is_keyW())
+            {
+                printf("Increasing number of samples to %d\n", ns + 100);
+                ns += 100;
+            }
+            // if S is pressed, decrease number of samples
+            if (display.is_keyS())
+            {
+                if (ns - 100 >= 1 && ns - 200 > f)
+                {
+                    printf("Decreasing number of samples to %d\n", ns - 100);
+                    ns -= 100;
+                }
+            }
+            printf("Rendering frame %d\n", f);
+            render<<<blocks, threads>>>(fb, nx, ny, 1, d_camera, d_world, d_rand_state, BG_GRADIENT);
             checkCudaErrors(cudaGetLastError());
             checkCudaErrors(cudaDeviceSynchronize());
-            f = 0;
-            // clear fb
-            checkCudaErrors(cudaMemset(fb, 0, fb_size));
+            if (f % int(100 / PROGRESS_DISPLAY_PERCENTAGE) == 0 || f == ns - 1)
+            {
+                // copy fb to temp_fb on the host
+                checkCudaErrors(cudaMemcpy(temp_fb, fb, fb_size, cudaMemcpyDeviceToHost));
+                if (display_state == 0)
+                {
+                    printf("Displaying frame %d\n", f);
+                    // overwrite the previous cimg display with the new image
+                    for (int j = ny - 1; j >= 0; j--)
+                    {
+                        for (int i = 0; i < nx; i++)
+                        {
+                            int pixel_index = j * nx + i;
+                            int ir = int(255.99 * temp_fb[pixel_index].x() / (f + 1));
+                            int ig = int(255.99 * temp_fb[pixel_index].y() / (f + 1));
+                            int ib = int(255.99 * temp_fb[pixel_index].z() / (f + 1));
+
+                            // clamp values and write to cimg
+                            cimg(i, ny - j - 1, 0, 0) = ir > 255 ? 255 : ir;
+                            cimg(i, ny - j - 1, 0, 1) = ig > 255 ? 255 : ig;
+                            cimg(i, ny - j - 1, 0, 2) = ib > 255 ? 255 : ib;
+                        }
+                    }
+                }
+                else if (display_state == 1 && prev_frame != NULL) // if key 1 is pressed and the previous frame is not null, display the difference between the previous frame and the current frame
+                {
+                    printf("Displaying difference between frame %d and frame %d\n", f, f - 1);
+                    // overwrite the previous cimg display with the new image
+                    for (int j = ny - 1; j >= 0; j--)
+                    {
+                        for (int i = 0; i < nx; i++)
+                        {
+                            int pixel_index = j * nx + i;
+                            int ir = int(255.99 * (temp_fb[pixel_index].x() - prev_frame[pixel_index].x()) / ((f + 1) - prev_frame_index + 1));
+                            int ig = int(255.99 * (temp_fb[pixel_index].y() - prev_frame[pixel_index].y()) / ((f + 1) - prev_frame_index + 1));
+                            int ib = int(255.99 * (temp_fb[pixel_index].z() - prev_frame[pixel_index].z()) / ((f + 1) - prev_frame_index + 1));
+
+                            // clamp values and write to cimg
+                            cimg(i, ny - j - 1, 0, 0) = ir > 255 ? 255 : ir;
+                            cimg(i, ny - j - 1, 0, 1) = ig > 255 ? 255 : ig;
+                            cimg(i, ny - j - 1, 0, 2) = ib > 255 ? 255 : ib;
+                        }
+                    }
+                }
+                else if (display_state == 2)
+                {
+                    printf("Displaying edge effect for frame %d\n", f);
+                    cimg = edge_effect(cimg, temp_fb, f, nx, ny);
+                }
+                // copy temp_fb to prev_frame
+                memcpy(prev_frame, temp_fb, fb_size);
+                prev_frame_index = f;
+            }
+            if (f == ns - 1)
+            {
+                render_complete = true;
+            }
+            if (display.is_keyR())
+            {
+                create_world<<<1, 1>>>(d_list, d_world, d_camera, nx, ny, num_hittables, d_rand_state2);
+                checkCudaErrors(cudaGetLastError());
+                checkCudaErrors(cudaDeviceSynchronize());
+                f = 0;
+                // clear fb
+                checkCudaErrors(cudaMemset(fb, 0, fb_size));
+            }
+
+            cimg.display(display);
+        }
+        stop = std::chrono::high_resolution_clock::now();
+        if (display_state != 0)
+        {
+            for (int j = ny - 1; j >= 0; j--)
+            {
+                for (int i = 0; i < nx; i++)
+                {
+                    int pixel_index = j * nx + i;
+                    int ir = int(255.99 * temp_fb[pixel_index].x() / (ns));
+                    int ig = int(255.99 * temp_fb[pixel_index].y() / (ns));
+                    int ib = int(255.99 * temp_fb[pixel_index].z() / (ns));
+
+                    // clamp values and write to cimg
+                    cimg(i, ny - j - 1, 0, 0) = ir > 255 ? 255 : ir;
+                    cimg(i, ny - j - 1, 0, 1) = ig > 255 ? 255 : ig;
+                    cimg(i, ny - j - 1, 0, 2) = ib > 255 ? 255 : ib;
+                }
+            }
+        }
+        cimg.display(display);
+        // set display title to say it's done
+        display.set_title("Ray Tracer - Done - Press ESC to Exit");
+        while (!display.is_closed() && !display.is_keyESC())
+        {
+            display.wait();
         }
     }
-
-    // stop timer
-    auto stop = std::chrono::high_resolution_clock::now();
+    else
+    {
+        printf("Rendering Image\n");
+        render<<<blocks, threads>>>(fb, nx, ny, ns, d_camera, d_world, d_rand_state, BG_GRADIENT);
+        checkCudaErrors(cudaGetLastError());
+        checkCudaErrors(cudaDeviceSynchronize());
+        render_complete = true;
+        stop = std::chrono::high_resolution_clock::now();
+    }
     auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(stop - start);
     // output render time in minutes and seconds
     int minutes = duration.count() / 1000.0f / 60.0f;
     int seconds = duration.count() / 1000.0f - minutes * 60.0f;
     std::cout << "Render time: " << minutes << " minutes " << seconds << " seconds" << std::endl;
 
-    cimg.display(display);
-
-    // keep the window open until the user closes it
-    while (!display.is_closed())
-    {
-        display.wait();
-    }
     if (render_complete)
     {
         checkCudaErrors(cudaMemcpy(temp_fb, fb, fb_size, cudaMemcpyDeviceToHost));
@@ -475,6 +520,7 @@ int main(int argc, char **argv)
                 int ir = int(255.99 * temp_fb[pixel_index].x() / ns);
                 int ig = int(255.99 * temp_fb[pixel_index].y() / ns);
                 int ib = int(255.99 * temp_fb[pixel_index].z() / ns);
+
                 // validate that the color is in range
                 ir = ir > 255 ? 255 : ir;
                 ir = ir < 0 ? 0 : ir;
