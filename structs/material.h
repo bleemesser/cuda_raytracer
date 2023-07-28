@@ -59,7 +59,7 @@ public:
 class matte : public material
 {
 public:
-    __device__ matte(const vec3 &a) : albedo(a) {}
+    __device__ __host__ matte(const vec3 &a) : albedo(a) {}
     __device__ virtual bool scatter(const ray &r_in, const hit_record &rec, vec3 &attenuation, ray &scattered, curandState *local_rand_state) const
     {
         vec3 target = rec.p + rec.normal + random_in_unit_sphere(local_rand_state);
@@ -75,7 +75,7 @@ public:
 class metal : public material
 {
 public:
-    __device__ metal(const vec3 &a, float f) : albedo(a)
+    __device__ __host__ metal(const vec3 &a, float f) : albedo(a)
     {
         if (f < 1)
             roughness = f;
@@ -99,7 +99,7 @@ public:
 class transparent : public material
 {
 public:
-    __device__ transparent(float ri, vec3 albedo) : ref_idx(ri), albedo(albedo) {}
+    __device__ __host__ transparent(float ri, vec3 albedo) : ref_idx(ri), albedo(albedo) {}
     __device__ virtual bool scatter(const ray &r_in, const hit_record &rec, vec3 &attenuation, ray &scattered, curandState *local_rand_state) const
     {
         vec3 outward_normal;
@@ -151,7 +151,7 @@ class light : public material
     public:
     vec3 color;
     float intensity;
-    __device__ light(vec3 color, float intensity) : color(color), intensity(intensity) {}
+    __device__ __host__ light(vec3 color, float intensity) : color(color), intensity(intensity) {}
     __device__ virtual bool scatter(const ray &r_in, const hit_record &rec, vec3 &attenuation, ray &scattered, curandState *local_rand_state) const
     {
         return false;

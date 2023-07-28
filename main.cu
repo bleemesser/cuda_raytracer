@@ -5,17 +5,20 @@
 #include "structs/hittable.h"
 #include "structs/world.h"
 #include "structs/sphere.h"
+#include "structs/triangle.h"
 #include "structs/camera.h"
 #include "structs/material.h"
 #include "structs/aabb.h"
 #include "structs/bvh.h"
+#include "tiny_obj_loader.h"
+#include "structs/obj.h"
 #include <curand_kernel.h>
 #include "CImg.h"
 #include <chrono>
 #include <unordered_map>
 #pragma comment(lib, "windowscodecs.lib") // WINDOWS
-#pragma comment(lib, "gdi32.lib") // WINDOWS
-#pragma comment(lib, "user32.lib") // WINDOWS
+#pragma comment(lib, "gdi32.lib")         // WINDOWS
+#pragma comment(lib, "user32.lib")        // WINDOWS
 
 // CUDA STUFF
 #define checkCudaErrors(val) check_cuda((val), #val, __FILE__, __LINE__)
@@ -114,7 +117,7 @@ __global__ void render(vec3 *fb, int max_x, int max_y, int ns, camera **cam, hit
 #define RND (curand_uniform(&local_rand_state))
 
 // // SETUP
-__global__ void create_world(hittable **d_list, hittable **d_world, hittable **d_bvh, camera **d_camera, int nx, int ny, int num_hittables, int span, curandState *rand_state, int *new_hittables)
+__global__ void create_world(hittable **d_list, hittable **d_world, camera **d_camera, int nx, int ny, int num_hittables, int span, curandState *rand_state)
 {
     if (threadIdx.x == 0 && blockIdx.x == 0)
     {
@@ -154,15 +157,8 @@ __global__ void create_world(hittable **d_list, hittable **d_world, hittable **d
         d_list[i++] = new sphere(vec3(0, 1, 0), 1, new metal(vec3(1.0, 1.0, 1.0), 0.0));
 
         printf("Made it to w\n");
-        // d_list[i++] = new sphere(vec3(0, 1,0),  1.0, new transparent(1.5));
-        // d_list[i++] = new sphere(vec3(-4, 1, 0), 1.0, new matte(vec3(0.4, 0.2, 0.1)));
-        // d_list[i++] = new sphere(vec3(4, 1, 0),  1.0, new metal(vec3(0.7, 0.6, 0.5), 0.0));
         *d_world = new world(d_list, num_hittables);
-        printf("Made it to bvh \n");
-        // create bvh
-        *d_bvh = new bvh_node(d_world, num_hittables, 0.0f, 1.0f, new_hittables, &local_rand_state);
-        
-        printf("Made it to c\n");
+
         vec3 lookfrom(0, 2, -15);
         vec3 lookat(0, 0, 0);
         float dist_to_focus = (lookfrom - lookat).length();
@@ -177,7 +173,9 @@ __global__ void create_world(hittable **d_list, hittable **d_world, hittable **d
     }
 }
 
-
+__global__ void construct_bvh(hittable **d_world, hittable **d_bvh, int num_hittables, curandState *rand_state)
+{
+}
 
 __global__ void free_world(hittable **d_list, hittable **d_world, camera **d_camera)
 {
@@ -217,18 +215,18 @@ cimg_library::CImg<unsigned char> edge_effect(cimg_library::CImg<unsigned char> 
             }
             else
             {
-                int ir2 = int(255.99 * fb[pixel_index + 1].x());    // right
-                int ig2 = int(255.99 * fb[pixel_index + 1].y());    // right
-                int ib2 = int(255.99 * fb[pixel_index + 1].z());    // right
-                int ir3 = int(255.99 * fb[pixel_index - 1].x());    // left
-                int ig3 = int(255.99 * fb[pixel_index - 1].y());    // left
-                int ib3 = int(255.99 * fb[pixel_index - 1].z());    // left
-                int ir4 = int(255.99 * fb[pixel_index + nx].x());   // up
-                int ig4 = int(255.99 * fb[pixel_index + nx].y());   // up
-                int ib4 = int(255.99 * fb[pixel_index + nx].z());   // up
-                int ir5 = int(255.99 * fb[pixel_index - nx].x());   // down
-                int ig5 = int(255.99 * fb[pixel_index - nx].y());   // down
-                int ib5 = int(255.99 * fb[pixel_index - nx].z());   // down
+                int ir2 = int(255.99 * fb[pixel_index + 1].x());  // right
+                int ig2 = int(255.99 * fb[pixel_index + 1].y());  // right
+                int ib2 = int(255.99 * fb[pixel_index + 1].z());  // right
+                int ir3 = int(255.99 * fb[pixel_index - 1].x());  // left
+                int ig3 = int(255.99 * fb[pixel_index - 1].y());  // left
+                int ib3 = int(255.99 * fb[pixel_index - 1].z());  // left
+                int ir4 = int(255.99 * fb[pixel_index + nx].x()); // up
+                int ig4 = int(255.99 * fb[pixel_index + nx].y()); // up
+                int ib4 = int(255.99 * fb[pixel_index + nx].z()); // up
+                int ir5 = int(255.99 * fb[pixel_index - nx].x()); // down
+                int ig5 = int(255.99 * fb[pixel_index - nx].y()); // down
+                int ib5 = int(255.99 * fb[pixel_index - nx].z()); // down
                 ir = (ir + ir2 + ir3 + ir4 + ir5) / 5;
                 ig = (ig + ig2 + ig3 + ig4 + ig5) / 5;
                 ib = (ib + ib2 + ib3 + ib4 + ib5) / 5;
@@ -299,17 +297,21 @@ int main(int argc, char **argv)
 
     // // ALLOCATE WORLD
     hittable **d_list;
-    // int num_hittables = 30 * 30 + 1 + 1 + 1; // 2*span*2*span + floor + any other objects
-    // checkCudaErrors(cudaMalloc((void **)&d_list, num_hittables * sizeof(hittable *)));
+    int num_hittables = 10 * 10 + 1 + 1 + 1; // 2*span*2*span + floor + any other objects
+    // int num_hittables = 1;
+    checkCudaErrors(cudaMalloc((void **)&d_list, num_hittables * sizeof(hittable *)));
     hittable **d_world;
-    // checkCudaErrors(cudaMalloc((void **)&d_world, sizeof(hittable *)));
-    hittable **d_bvh;
-    // checkCudaErrors(cudaMalloc((void **)&d_bvh, sizeof(hittable *)));
+    checkCudaErrors(cudaMalloc((void **)&d_world, sizeof(hittable *)));
     camera **d_camera;
-    // checkCudaErrors(cudaMalloc((void **)&d_camera, sizeof(camera *)));
-    // create_world<<<1, 1>>>(d_list, d_world, d_camera, nx, ny, num_hittables, 15, d_rand_state2);
-    // checkCudaErrors(cudaGetLastError());
-    // checkCudaErrors(cudaDeviceSynchronize());
+    checkCudaErrors(cudaMalloc((void **)&d_camera, sizeof(camera *)));
+    create_world<<<1, 1>>>(d_list, d_world, d_camera, nx, ny, num_hittables, 5, d_rand_state2);
+    checkCudaErrors(cudaGetLastError());
+    checkCudaErrors(cudaDeviceSynchronize());
+    hittable **d_bvh;
+    checkCudaErrors(cudaMalloc((void **)&d_bvh, num_hittables * sizeof(hittable *)));
+    construct_bvh<<<1, 1>>>(d_list, d_bvh, num_hittables, d_rand_state2);
+    checkCudaErrors(cudaGetLastError());
+    checkCudaErrors(cudaDeviceSynchronize());
 
     // RENDER
     dim3 blocks(nx / tx + 1, ny / ty + 1);
@@ -318,182 +320,141 @@ int main(int argc, char **argv)
     checkCudaErrors(cudaGetLastError());
     checkCudaErrors(cudaDeviceSynchronize());
 
-    // // use cimg to create an empty display window
-    // cimg_library::CImg<unsigned char> cimg(nx, ny, 1, 3, 0);
-    // cimg_library::CImgDisplay display(cimg, "Ray Tracer");
-    // vec3 *temp_fb;
-    // vec3 *prev_frame;
-    // int prev_frame_index = 0;
-    // int display_state = 0;
-    // // normal malloc for temp_fb: we want to store the frame on the host when writing it out to avoid too many invdividual copy calls
-    // temp_fb = (vec3 *)malloc(fb_size);
-    // prev_frame = (vec3 *)malloc(fb_size);
-    // bool render_complete = false;
-    // for (int f = 0; f < ns; f++)
-    // {
-    //     if (display.is_closed())
-    //         break;
-    //     if (display.is_key(49))
-    //     {
-    //         display_state = 0;
-    //     }
-    //     if (display.is_key(50) && f > 0)
-    //     {
-    //         display_state = 1;
-    //     }
-    //     if (display.is_key(51))
-    //     {
-    //         display_state = 2;
-    //     }
-    //     // if up arrow is pressed, increase progress display percentage 
-    //     if (display.is_keyARROWUP())
-    //     {
-    //         if (PROGRESS_DISPLAY_PERCENTAGE + 50 <= ns)
-    //         {
-    //             printf("Increasing progress display percentage to %d\n", PROGRESS_DISPLAY_PERCENTAGE + 50);
-    //             PROGRESS_DISPLAY_PERCENTAGE += 50;
-    //         }
-    //     }
-    //     // if down arrow is pressed, decrease progress display percentage
-    //     if (display.is_keyARROWDOWN())
-    //     {
-    //         if (PROGRESS_DISPLAY_PERCENTAGE - 50 >= 1)
-    //         {
-    //             printf("Decreasing progress display percentage to %d\n", PROGRESS_DISPLAY_PERCENTAGE - 50);
-    //             PROGRESS_DISPLAY_PERCENTAGE -= 50;
-    //         }
-    //     }
-    //     // if ] is pressed, increase number of samples
-    //     if (display.is_keyW())
-    //     {
-    //         printf("Increasing number of samples to %d\n", ns + 100);
-    //         ns += 100;
-    //     }
-    //     // if [ is pressed, decrease number of samples
-    //     if (display.is_keyS())
-    //     {
-    //         if (ns - 100 >= 1 && ns - 200 > f)
-    //         {
-    //             printf("Decreasing number of samples to %d\n", ns - 100);
-    //             ns -= 100;
-    //         }
-    //     }
-    //     printf("Rendering frame %d\n", f);
-    //     render<<<blocks, threads>>>(fb, nx, ny, 1, d_camera, d_world, d_rand_state, BG_GRADIENT);
-    //     checkCudaErrors(cudaGetLastError());
-    //     checkCudaErrors(cudaDeviceSynchronize());
-    //     if (f % int(ns / PROGRESS_DISPLAY_PERCENTAGE) == 0 || f == ns - 1)
-    //     {
-    //         // copy fb to temp_fb on the host
-    //         checkCudaErrors(cudaMemcpy(temp_fb, fb, fb_size, cudaMemcpyDeviceToHost));
-    //         if (display_state == 0)
-    //         {
-    //             printf("Displaying frame %d\n", f);
-    //             // overwrite the previous cimg display with the new image
-    //             for (int j = ny - 1; j >= 0; j--)
-    //             {
-    //                 for (int i = 0; i < nx; i++)
-    //                 {
-    //                     int pixel_index = j * nx + i;
-    //                     int ir = int(255.99 * temp_fb[pixel_index].x() / (f + 1));
-    //                     int ig = int(255.99 * temp_fb[pixel_index].y() / (f + 1));
-    //                     int ib = int(255.99 * temp_fb[pixel_index].z() / (f + 1));
-
-    //                     // clamp values and write to cimg
-    //                     cimg(i, ny - j - 1, 0, 0) = ir > 255 ? 255 : ir;
-    //                     cimg(i, ny - j - 1, 0, 1) = ig > 255 ? 255 : ig;
-    //                     cimg(i, ny - j - 1, 0, 2) = ib > 255 ? 255 : ib;
-    //                 }
-    //             }
-    //             // display the image
-    //             cimg.display(display);
-    //         }
-    //         else if (display_state == 1 && prev_frame != NULL) // if key 1 is pressed and the previous frame is not null, display the difference between the previous frame and the current frame
-    //         {
-    //             printf("Displaying difference between frame %d and frame %d\n", f, f - 1);
-    //             // overwrite the previous cimg display with the new image
-    //             for (int j = ny - 1; j >= 0; j--)
-    //             {
-    //                 for (int i = 0; i < nx; i++)
-    //                 {
-    //                     int pixel_index = j * nx + i;
-    //                     int ir = int(255.99 * (temp_fb[pixel_index].x() - prev_frame[pixel_index].x()) / ((f + 1) - prev_frame_index + 1));
-    //                     int ig = int(255.99 * (temp_fb[pixel_index].y() - prev_frame[pixel_index].y()) / ((f + 1) - prev_frame_index + 1));
-    //                     int ib = int(255.99 * (temp_fb[pixel_index].z() - prev_frame[pixel_index].z()) / ((f + 1) - prev_frame_index + 1));
-
-    //                     // clamp values and write to cimg
-    //                     cimg(i, ny - j - 1, 0, 0) = ir > 255 ? 255 : ir;
-    //                     cimg(i, ny - j - 1, 0, 1) = ig > 255 ? 255 : ig;
-    //                     cimg(i, ny - j - 1, 0, 2) = ib > 255 ? 255 : ib;
-    //                 }
-    //             }
-    //             // display the image
-    //             cimg.display(display);
-    //         }
-    //         else if (display_state == 2)
-    //         {
-    //             printf("Displaying edge effect for frame %d\n", f);
-    //             cimg = edge_effect(cimg, temp_fb, f, nx, ny);
-    //             cimg.display(display);
-    //         }
-    //         // copy temp_fb to prev_frame
-    //         memcpy(prev_frame, temp_fb, fb_size);
-    //         prev_frame_index = f;
-    //     }
-    //     if (f == ns - 1)
-    //     {
-    //         render_complete = true;
-    //     }
-    //     if (display.is_keyR())
-    //     {
-    //         create_world<<<1, 1>>>(d_list, d_world, d_camera, nx, ny, num_hittables, 15, d_rand_state2);
-    //         checkCudaErrors(cudaGetLastError());
-    //         checkCudaErrors(cudaDeviceSynchronize());
-    //         f = 0;
-    //         // clear fb
-    //         checkCudaErrors(cudaMemset(fb, 0, fb_size));
-    //     }
-    // }
-
-    // BENCHMARK
-    std::unordered_map<int, int> benchmark;
-    for (int i = 5; i < 50; i+=5) {
-        std::cout << "Benchmarking with " << i << " objects" << std::endl;
-            // ALLOCATE WORLD
-        // get number of bounding boxes
-
-        int num_hittables = 2*i * 2*i + 1 + 1 + 1; // 2*span*2*span + floor + any other objects
-        checkCudaErrors(cudaMalloc((void **)&d_list, num_hittables * sizeof(hittable *)));
-        checkCudaErrors(cudaMalloc((void **)&d_world, sizeof(hittable *)));
-        checkCudaErrors(cudaMalloc((void **)&d_bvh, num_hittables * sizeof(hittable *)));
-        checkCudaErrors(cudaMalloc((void **)&d_camera, sizeof(camera *)));
-        int new_hittables;
-        // put new_hittables on the device
-        checkCudaErrors(cudaMalloc((void **)&new_hittables, sizeof(int)));
-        create_world<<<1, 1>>>(d_list, d_world, d_bvh, d_camera, nx, ny, num_hittables, i, d_rand_state2, &new_hittables);
-        checkCudaErrors(cudaGetLastError());
-        checkCudaErrors(cudaDeviceSynchronize());
-        // now that we have the number of bounding boxes, we can expand the size of the bvh
-        checkCudaErrors(cudaFree(d_bvh));
-        checkCudaErrors(cudaMalloc((void **)&d_bvh, (num_hittables + new_hittables) * sizeof(hittable *)));
-        create_world<<<1, 1>>>(d_list, d_world, d_bvh, d_camera, nx, ny, num_hittables, i, d_rand_state2, &new_hittables);
-        checkCudaErrors(cudaGetLastError());
-        checkCudaErrors(cudaDeviceSynchronize());
-
-        // RENDER A SINGLE FRAME WITH 1 SAMPLE
-        auto start1 = std::chrono::high_resolution_clock::now();
-        render<<<blocks, threads>>>(fb, nx, ny, 1, d_camera, d_bvh, d_rand_state, BG_GRADIENT);
-        checkCudaErrors(cudaGetLastError());
-        checkCudaErrors(cudaDeviceSynchronize());
-        auto stop1 = std::chrono::high_resolution_clock::now();
-        auto duration1 = std::chrono::duration_cast<std::chrono::milliseconds>(stop1 - start1);
-        // add miliseconds to benchmark
-        benchmark[i] = duration1.count();
-    }
-    // print benchmark
-    for (auto const& x : benchmark)
+    // use cimg to create an empty display window
+    cimg_library::CImg<unsigned char> cimg(nx, ny, 1, 3, 0);
+    cimg_library::CImgDisplay display(cimg, "Ray Tracer");
+    vec3 *temp_fb;
+    vec3 *prev_frame;
+    int prev_frame_index = 0;
+    int display_state = 0;
+    // normal malloc for temp_fb: we want to store the frame on the host when writing it out to avoid too many invdividual copy calls
+    temp_fb = (vec3 *)malloc(fb_size);
+    prev_frame = (vec3 *)malloc(fb_size);
+    bool render_complete = false;
+    for (int f = 0; f < ns; f++)
     {
-        std::cout << x.first << ": " << x.second << std::endl;
+        if (display.is_closed())
+            break;
+        if (display.is_key(49))
+        {
+            display_state = 0;
+        }
+        if (display.is_key(50) && f > 0)
+        {
+            display_state = 1;
+        }
+        if (display.is_key(51))
+        {
+            display_state = 2;
+        }
+        // if up arrow is pressed, increase progress display percentage
+        if (display.is_keyARROWUP())
+        {
+            if (PROGRESS_DISPLAY_PERCENTAGE + 50 <= ns)
+            {
+                printf("Increasing progress display percentage to %d\n", PROGRESS_DISPLAY_PERCENTAGE + 50);
+                PROGRESS_DISPLAY_PERCENTAGE += 50;
+            }
+        }
+        // if down arrow is pressed, decrease progress display percentage
+        if (display.is_keyARROWDOWN())
+        {
+            if (PROGRESS_DISPLAY_PERCENTAGE - 50 >= 1)
+            {
+                printf("Decreasing progress display percentage to %d\n", PROGRESS_DISPLAY_PERCENTAGE - 50);
+                PROGRESS_DISPLAY_PERCENTAGE -= 50;
+            }
+        }
+        // if ] is pressed, increase number of samples
+        if (display.is_keyW())
+        {
+            printf("Increasing number of samples to %d\n", ns + 100);
+            ns += 100;
+        }
+        // if [ is pressed, decrease number of samples
+        if (display.is_keyS())
+        {
+            if (ns - 100 >= 1 && ns - 200 > f)
+            {
+                printf("Decreasing number of samples to %d\n", ns - 100);
+                ns -= 100;
+            }
+        }
+        printf("Rendering frame %d\n", f);
+        render<<<blocks, threads>>>(fb, nx, ny, 1, d_camera, d_world, d_rand_state, BG_GRADIENT);
+        checkCudaErrors(cudaGetLastError());
+        checkCudaErrors(cudaDeviceSynchronize());
+        if (f % int(ns / PROGRESS_DISPLAY_PERCENTAGE) == 0 || f == ns - 1)
+        {
+            // copy fb to temp_fb on the host
+            checkCudaErrors(cudaMemcpy(temp_fb, fb, fb_size, cudaMemcpyDeviceToHost));
+            if (display_state == 0)
+            {
+                printf("Displaying frame %d\n", f);
+                // overwrite the previous cimg display with the new image
+                for (int j = ny - 1; j >= 0; j--)
+                {
+                    for (int i = 0; i < nx; i++)
+                    {
+                        int pixel_index = j * nx + i;
+                        int ir = int(255.99 * temp_fb[pixel_index].x() / (f + 1));
+                        int ig = int(255.99 * temp_fb[pixel_index].y() / (f + 1));
+                        int ib = int(255.99 * temp_fb[pixel_index].z() / (f + 1));
+
+                        // clamp values and write to cimg
+                        cimg(i, ny - j - 1, 0, 0) = ir > 255 ? 255 : ir;
+                        cimg(i, ny - j - 1, 0, 1) = ig > 255 ? 255 : ig;
+                        cimg(i, ny - j - 1, 0, 2) = ib > 255 ? 255 : ib;
+                    }
+                }
+                // display the image
+                cimg.display(display);
+            }
+            else if (display_state == 1 && prev_frame != NULL) // if key 1 is pressed and the previous frame is not null, display the difference between the previous frame and the current frame
+            {
+                printf("Displaying difference between frame %d and frame %d\n", f, f - 1);
+                // overwrite the previous cimg display with the new image
+                for (int j = ny - 1; j >= 0; j--)
+                {
+                    for (int i = 0; i < nx; i++)
+                    {
+                        int pixel_index = j * nx + i;
+                        int ir = int(255.99 * (temp_fb[pixel_index].x() - prev_frame[pixel_index].x()) / ((f + 1) - prev_frame_index + 1));
+                        int ig = int(255.99 * (temp_fb[pixel_index].y() - prev_frame[pixel_index].y()) / ((f + 1) - prev_frame_index + 1));
+                        int ib = int(255.99 * (temp_fb[pixel_index].z() - prev_frame[pixel_index].z()) / ((f + 1) - prev_frame_index + 1));
+
+                        // clamp values and write to cimg
+                        cimg(i, ny - j - 1, 0, 0) = ir > 255 ? 255 : ir;
+                        cimg(i, ny - j - 1, 0, 1) = ig > 255 ? 255 : ig;
+                        cimg(i, ny - j - 1, 0, 2) = ib > 255 ? 255 : ib;
+                    }
+                }
+                // display the image
+                cimg.display(display);
+            }
+            else if (display_state == 2)
+            {
+                printf("Displaying edge effect for frame %d\n", f);
+                cimg = edge_effect(cimg, temp_fb, f, nx, ny);
+                cimg.display(display);
+            }
+            // copy temp_fb to prev_frame
+            memcpy(prev_frame, temp_fb, fb_size);
+            prev_frame_index = f;
+        }
+        if (f == ns - 1)
+        {
+            render_complete = true;
+        }
+        // if (display.is_keyR())
+        // {
+        //     create_world<<<1, 1>>>(d_list, d_world, d_camera, nx, ny, num_hittables, 5, d_rand_state2);
+        //     checkCudaErrors(cudaGetLastError());
+        //     checkCudaErrors(cudaDeviceSynchronize());
+        //     f = 0;
+        //     // clear fb
+        //     checkCudaErrors(cudaMemset(fb, 0, fb_size));
+        // }
     }
 
     // stop timer
@@ -504,41 +465,41 @@ int main(int argc, char **argv)
     int seconds = duration.count() / 1000.0f - minutes * 60.0f;
     std::cout << "Render time: " << minutes << " minutes " << seconds << " seconds" << std::endl;
 
-    // cimg.display(display);
+    cimg.display(display);
 
-    // // keep the window open until the user closes it
-    // while (!display.is_closed())
-    // {
-    //     display.wait();
-    // }
-    // if (render_complete)
-    // {
-    //     checkCudaErrors(cudaMemcpy(temp_fb, fb, fb_size, cudaMemcpyDeviceToHost));
+    // keep the window open until the user closes it
+    while (!display.is_closed())
+    {
+        display.wait();
+    }
+    if (render_complete)
+    {
+        checkCudaErrors(cudaMemcpy(temp_fb, fb, fb_size, cudaMemcpyDeviceToHost));
 
-    //     FILE *f = fopen("image.ppm", "w");
-    //     fprintf(f, "P3\n%d %d\n%d\n", nx, ny, 255);
+        FILE *f = fopen("image.ppm", "w");
+        fprintf(f, "P3\n%d %d\n%d\n", nx, ny, 255);
 
-    //     for (int j = ny - 1; j >= 0; j--)
-    //     {
-    //         for (int i = 0; i < nx; i++)
-    //         {
-    //             size_t pixel_index = j * nx + i;
-    //             int ir = int(255.99 * temp_fb[pixel_index].x() / ns);
-    //             int ig = int(255.99 * temp_fb[pixel_index].y() / ns);
-    //             int ib = int(255.99 * temp_fb[pixel_index].z() / ns);
-    //             // validate that the color is in range
-    //             ir = ir > 255 ? 255 : ir;
-    //             ir = ir < 0 ? 0 : ir;
-    //             ig = ig > 255 ? 255 : ig;
-    //             ig = ig < 0 ? 0 : ig;
-    //             ib = ib > 255 ? 255 : ib;
-    //             ib = ib < 0 ? 0 : ib;
+        for (int j = ny - 1; j >= 0; j--)
+        {
+            for (int i = 0; i < nx; i++)
+            {
+                size_t pixel_index = j * nx + i;
+                int ir = int(255.99 * temp_fb[pixel_index].x() / ns);
+                int ig = int(255.99 * temp_fb[pixel_index].y() / ns);
+                int ib = int(255.99 * temp_fb[pixel_index].z() / ns);
+                // validate that the color is in range
+                ir = ir > 255 ? 255 : ir;
+                ir = ir < 0 ? 0 : ir;
+                ig = ig > 255 ? 255 : ig;
+                ig = ig < 0 ? 0 : ig;
+                ib = ib > 255 ? 255 : ib;
+                ib = ib < 0 ? 0 : ib;
 
-    //             fprintf(f, "%d %d %d\n", ir, ig, ib);
-    //         }
-    //     }
-    //     fclose(f);
-    // }
+                fprintf(f, "%d %d %d\n", ir, ig, ib);
+            }
+        }
+        fclose(f);
+    }
 
     checkCudaErrors(cudaDeviceSynchronize());
     free_world<<<1, 1>>>(d_list, d_world, d_camera);

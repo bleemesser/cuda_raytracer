@@ -6,17 +6,18 @@
 #include "aabb.h"
 #include "ray.h"
 #include <thrust/sort.h>
+#include <curand_kernel.h>
 
 class bvh_node : public hittable {
     public:
         __device__ bvh_node();
 
-        __device__ bvh_node(hittable** l, int num_hittables, float time0, float time1, int* num_new_hittables, curandState *local_rand_state)
-            : bvh_node(l, 0, num_hittables, time0, time1, num_new_hittables, local_rand_state) {}
+        __device__ bvh_node(hittable** l, int num_hittables, float time0, float time1, curandState *local_rand_state)
+            : bvh_node(l, 0, num_hittables, time0, time1, local_rand_state) {}
 
 
         __device__ bvh_node(
-            hittable **l, int start, int end, float time0, float time1, int* num_new_hittables, curandState *local_rand_state);
+            hittable **l, int start, int end, float time0, float time1, curandState *local_rand_state);
 
         __device__ virtual bool hit(
             const ray& r, float t_min, float t_max, hit_record& rec) const override;
@@ -65,7 +66,7 @@ __device__ bool bvh_node::bounding_box(float t0, float t1, aabb& box) const {
 }
 
 __device__ bool bvh_node::hit(const ray& r, float t_min, float t_max, hit_record& rec) const {
-    if (!b.hit(r, t_min, t_max))
+    if (!b.hit(r, t_min, t_max, rec))
         return false;
 
     bool hit_left = left->hit(r, t_min, t_max, rec);
@@ -74,8 +75,8 @@ __device__ bool bvh_node::hit(const ray& r, float t_min, float t_max, hit_record
     return hit_left || hit_right;
 }
 
-__device__ bvh_node::bvh_node(hittable **l, int start, int end, float time0, float time1, int *num_new_hittables, curandState *local_rand_state) {
-    printf("bvh: made it to constructor\n");
+__device__ bvh_node::bvh_node(hittable **l, int start, int end, float time0, float time1, curandState *local_rand_state) {
+    printf("bvh: CALLED\n");
     int axis = random_int(0, 2, local_rand_state);
     auto comparator = (axis == 0) ? box_x_compare
                     : (axis == 1) ? box_y_compare
@@ -101,13 +102,17 @@ __device__ bvh_node::bvh_node(hittable **l, int start, int end, float time0, flo
         printf("bvh: made it past object_span == 2\n");
     } else {
         printf("Object span > 2\n");
-        // thrust::sort(l + start, l + end, comparator);
+        thrust::sort(l + start, l + end, comparator);
         printf("bvh: made it past sort\n");
         int mid = start + object_span / 2;
-        left = new bvh_node(l, start, mid, time0, time1, num_new_hittables, local_rand_state);
-        right = new bvh_node(l, mid, end, time0, time1, num_new_hittables, local_rand_state);
+        printf("bvh: made it past mid\n");
+        printf("calling left with start: %d, mid: %d\n", start, mid);
+        bvh_node left(l, start, mid, time0, time1, local_rand_state); // ERROR IS HERE
+        printf("bvh: made it past left\n");
+        bvh_node right(l, mid, end, time0, time1, local_rand_state);
+        printf("bvh: made it past right\n");
         printf("bvh: made it past left and right\n");
-        num_new_hittables += 2;
+
     }
 
     if (!left->bounding_box(time0, time1, l1)
@@ -118,6 +123,8 @@ __device__ bvh_node::bvh_node(hittable **l, int start, int end, float time0, flo
     b = surrounding_box(l1, r1);
     printf("bvh: made it to end of constructor\n");
 }
+
+
 
 
 

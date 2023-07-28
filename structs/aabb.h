@@ -3,19 +3,18 @@
 
 #include "vec3.h"
 #include "ray.h"
+#include "hittable.h"
 
-__host__ __device__ inline float minf(float a, float b) { return a < b ? a : b; }
-__host__ __device__ inline float maxf(float a, float b) { return a > b ? a : b; }
+struct hit_record;
+
+__device__ inline float minf(float a, float b) { return a < b ? a : b; }
+__device__ inline float maxf(float a, float b) { return a > b ? a : b; }
 
 class aabb {
     public:
-        __device__ aabb() {}
-        __device__ aabb(const vec3& a, const vec3& b) { min = a; max = b; }
-
-        // vec3 min() const { return min; }
-        // vec3 max() const { return max; }
-
-        __device__ inline bool aabb::hit(const ray& r, double t_min, double t_max) const {
+        __device__ aabb() {};
+        __device__ aabb(const vec3& a, const vec3& b) { min = a; max = b; };
+        __device__ bool hit(const ray& r, float t_min, float t_max, hit_record& rec) const {
             for (int a = 0; a < 3; a++) {
                 auto invD = 1.0f / r.direction().get(a);
                 auto t0 = (min.get(a) - r.origin().get(a)) * invD;
@@ -32,11 +31,11 @@ class aabb {
                     return false;
             }
             return true;
-        }
-
+        };
 
         vec3 min;
         vec3 max;
 };
+
 
 #endif
